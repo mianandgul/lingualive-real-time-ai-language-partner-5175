@@ -1,0 +1,10 @@
+{
+  "name": "LinguaLive - Real-Time AI Language Partner",
+  "description": "Master new languages through real-time conversational AI voice practice, immersive roleplay scenarios, instant translation, and live grammar coaching.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

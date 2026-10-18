@@ -3,6 +3,7 @@ import { Scenario, TranscriptItem, LiveVoiceName, VocabularyItem } from '../type
 import { LiveAudioPlayer, LiveAudioRecorder } from '../services/audioUtils';
 import { AudioVisualizer } from './AudioVisualizer';
 import { TranscriptView } from './TranscriptView';
+import { GoogleGenAI, Modality } from '@google/genai';
 import {
   Mic,
   MicOff,
@@ -12,11 +13,11 @@ import {
   CheckCircle2,
   Circle,
   HelpCircle,
-  ChevronRight,
   Send,
   AlertTriangle,
   RefreshCw,
   Radio,
+  Key,
 } from 'lucide-react';
 
 interface LiveVoiceRoomProps {
@@ -46,6 +47,8 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
   const [userVolume, setUserVolume] = useState<number>(0);
   const [modelVolume, setModelVolume] = useState<number>(0);
   const [connectionError, setConnectionError] = useState<string | null>(null);
+  const [showApiKeyPrompt, setShowApiKeyPrompt] = useState<boolean>(false);
+  const [customKeyInput, setCustomKeyInput] = useState<string>('');
 
   // Transcript items
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
@@ -61,6 +64,7 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
   const playerRef = useRef<LiveAudioPlayer | null>(null);
   const recorderRef = useRef<LiveAudioRecorder | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const liveSessionRef = useRef<any>(null);
   const meterIntervalRef = useRef<number | null>(null);
   const connectionTimeoutRef = useRef<number | null>(null);
   const isConnectingRef = useRef<boolean>(false);
@@ -114,6 +118,14 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
     if (playerRef.current) {
       playerRef.current.close();
     }
+    if (liveSessionRef.current) {
+      try {
+        liveSessionRef.current.close();
+      } catch {
+        // Ignore
+      }
+      liveSessionRef.current = null;
+    }
     if (wsRef.current) {
       try {
         wsRef.current.close();
@@ -126,6 +138,168 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
     isMicReadyRef.current = false;
     isConnectingRef.current = false;
   }, []);
+
+  // Helper to establish direct client-side Gemini Live connection (used on Vercel / serverless)
+  const connectDirectLiveAPI = useCallback(async () => {
+    let activeToken = '';
+    let isEphemeral = false;
+
+    // 1. Fetch an ephemeral token from /api/live-token (secure server-side generation)
+    try {
+      const res = await fetch('/api/live-token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.token) {
+          activeToken = data.token;
+          isEphemeral = true;
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch ephemeral token from /api/live-token:', e);
+    }
+
+    // 2. If no ephemeral token was returned, check for manual user key in localStorage
+    if (!activeToken) {
+      const userKey = localStorage.getItem('lingualive_gemini_key') || '';
+      if (userKey) {
+        activeToken = userKey;
+        isEphemeral = false;
+      }
+    }
+
+    // 3. If still no token or key, prompt the user with clear instructions
+    if (!activeToken) {
+      if (connectionTimeoutRef.current) {
+        window.clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
+      setIsConnecting(false);
+      setIsConnected(false);
+      isConnectingRef.current = false;
+      setConnectionError(
+        'Live voice requires a Gemini API key. Please add GEMINI_API_KEY to your Vercel Project Settings > Environment Variables, or enter your API key below.'
+      );
+      setShowApiKeyPrompt(true);
+      return;
+    }
+
+    try {
+      const ai = new GoogleGenAI({
+        apiKey: activeToken,
+        ...(isEphemeral ? { httpOptions: { apiVersion: 'v1alpha' } } : {}),
+      });
+
+      const systemInstruction = `You are an authentic, engaging native language speaking partner for real-time conversation practice.
+Target Language: ${scenario.language}
+Learner Level: ${scenario.level}
+Roleplay Scenario: ${scenario.title} (${scenario.partnerRole})
+Scenario Context: ${scenario.description}. Starter context: ${scenario.starterGreeting}
+
+Key guidelines for voice conversation:
+1. Speak in ${scenario.language}. Speak clearly and at an appropriate pace for ${scenario.level} level.
+2. Keep turns short and conversational (1-2 sentences at a time) so the learner has ample space to speak and practice.
+3. If the learner hesitates, stumbles, or uses English, be warm and patient. Encourage them and prompt them with easy vocabulary.
+4. If they make minor errors, rephrase naturally in your response without making it feel like a reprimand.
+5. Embody your role authentically and make it fun, lively, and immersive.`;
+
+      const session = await ai.live.connect({
+        model: 'gemini-3.8-live',
+        config: {
+          responseModalities: [Modality.AUDIO],
+          speechConfig: {
+            voiceConfig: {
+              prebuiltVoiceConfig: { voiceName: selectedVoice || 'Zephyr' },
+            },
+          },
+          systemInstruction,
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
+        },
+        callbacks: {
+          onopen: () => {
+            if (connectionTimeoutRef.current) {
+              window.clearTimeout(connectionTimeoutRef.current);
+              connectionTimeoutRef.current = null;
+            }
+            sessionReadyRef.current = true;
+            setIsConnected(true);
+            setConnectionError(null);
+            setShowApiKeyPrompt(false);
+            if (isMicReadyRef.current) {
+              setIsConnecting(false);
+              isConnectingRef.current = false;
+            }
+          },
+          onmessage: (serverMsg: any) => {
+            const parts = serverMsg.serverContent?.modelTurn?.parts;
+            if (parts && parts.length > 0) {
+              for (const part of parts) {
+                if (part.inlineData?.data && playerRef.current) {
+                  playerRef.current.playChunk(part.inlineData.data);
+                  setIsModelSpeaking(true);
+                }
+                if (part.text) {
+                  currentModelTurnRef.current += part.text;
+                  updateStreamingModelTurn(currentModelTurnRef.current);
+                }
+              }
+            }
+            if (serverMsg.serverContent?.inputAudioTranscription?.text) {
+              appendUserTurn(serverMsg.serverContent.inputAudioTranscription.text);
+            }
+            if (serverMsg.serverContent?.outputAudioTranscription?.text) {
+              currentModelTurnRef.current = serverMsg.serverContent.outputAudioTranscription.text;
+              finalizeModelTurn(serverMsg.serverContent.outputAudioTranscription.text);
+            }
+            if (serverMsg.serverContent?.interrupted) {
+              if (playerRef.current) playerRef.current.interrupt();
+              setIsModelSpeaking(false);
+            }
+            if (serverMsg.serverContent?.turnComplete) {
+              setIsModelSpeaking(false);
+              if (currentModelTurnRef.current) {
+                finalizeModelTurn(currentModelTurnRef.current);
+                currentModelTurnRef.current = '';
+              }
+            }
+          },
+          onerror: (err: any) => {
+            console.error('Direct Live API error:', err);
+            if (connectionTimeoutRef.current) {
+              window.clearTimeout(connectionTimeoutRef.current);
+              connectionTimeoutRef.current = null;
+            }
+            setConnectionError('Gemini Live API error: ' + (err?.message || 'Check your API key.'));
+            setIsConnecting(false);
+            setIsConnected(false);
+            isConnectingRef.current = false;
+          },
+          onclose: () => {
+            setIsConnected(false);
+            sessionReadyRef.current = false;
+          },
+        },
+      });
+
+      liveSessionRef.current = session;
+    } catch (directErr: any) {
+      console.error('Failed to establish direct Live connection:', directErr);
+      if (connectionTimeoutRef.current) {
+        window.clearTimeout(connectionTimeoutRef.current);
+        connectionTimeoutRef.current = null;
+      }
+      setConnectionError(
+        directErr?.message ||
+          'Connection to Live voice server failed. Please check your GEMINI_API_KEY.'
+      );
+      setIsConnecting(false);
+      setIsConnected(false);
+      isConnectingRef.current = false;
+    }
+  }, [scenario, selectedVoice]);
 
   const startSession = useCallback(async () => {
     // Avoid duplicate initialization requests
@@ -145,7 +319,15 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
       connectionTimeoutRef.current = null;
     }
 
-    // Clean up previous socket if any
+    // Clean up previous connections
+    if (liveSessionRef.current) {
+      try {
+        liveSessionRef.current.close();
+      } catch {
+        // Ignore
+      }
+      liveSessionRef.current = null;
+    }
     if (wsRef.current) {
       try {
         wsRef.current.close();
@@ -159,14 +341,7 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
     connectionTimeoutRef.current = window.setTimeout(() => {
       if (!sessionReadyRef.current) {
         console.warn('Live voice connection timed out');
-        if (wsRef.current) {
-          try {
-            wsRef.current.close();
-          } catch {
-            // Ignore
-          }
-          wsRef.current = null;
-        }
+        cleanupAll();
         setIsConnecting(false);
         setIsConnected(false);
         isConnectingRef.current = false;
@@ -187,13 +362,22 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
     recorderRef.current
       .start((base64Pcm) => {
         // Only stream chunks when session handshake is verified and mic is not muted
-        if (sessionReadyRef.current && wsRef.current?.readyState === WebSocket.OPEN && !isMutedRef.current) {
-          wsRef.current.send(
-            JSON.stringify({
-              type: 'audio',
-              data: base64Pcm,
-            })
-          );
+        if (sessionReadyRef.current && !isMutedRef.current) {
+          if (liveSessionRef.current) {
+            liveSessionRef.current.sendRealtimeInput({
+              audio: {
+                data: base64Pcm,
+                mimeType: 'audio/pcm;rate=16000',
+              },
+            });
+          } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+            wsRef.current.send(
+              JSON.stringify({
+                type: 'audio',
+                data: base64Pcm,
+              })
+            );
+          }
         }
       })
       .then(() => {
@@ -232,10 +416,25 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
         isConnectingRef.current = false;
       });
 
-    // 3. Concurrently establish WebSocket connection to Gemini Live
+    // 3. Establish Live Voice Connection
+    // Detect environment: Vercel serverless has no persistent WebSocket server.
+    const isVercel = window.location.hostname.endsWith('.vercel.app');
+    const configuredBackend =
+      (typeof process !== 'undefined' && process.env?.VITE_BACKEND_URL) ||
+      import.meta.env.VITE_BACKEND_URL ||
+      '';
+
+    // If running on Vercel and no external WebSocket backend is configured, connect directly via client Live API!
+    if (isVercel && !configuredBackend) {
+      await connectDirectLiveAPI();
+      return;
+    }
+
+    // Otherwise (AI Studio, local dev, Docker, or external backend): attempt backend WebSocket proxy
     try {
-      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-      const wsUrl = `${protocol}//${window.location.host}/live`;
+      const wsUrl = configuredBackend
+        ? `${configuredBackend.replace(/^http/, 'ws')}/live`
+        : `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/live`;
       const socket = new WebSocket(wsUrl);
       wsRef.current = socket;
 
@@ -307,16 +506,18 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
         }
       };
 
-      socket.onerror = (err) => {
-        console.error('Live WebSocket error:', err);
-        if (connectionTimeoutRef.current) {
-          window.clearTimeout(connectionTimeoutRef.current);
-          connectionTimeoutRef.current = null;
+      socket.onerror = async (err) => {
+        console.warn('Backend WebSocket unavailable, attempting direct Live API fallback...', err);
+        if (wsRef.current) {
+          try {
+            wsRef.current.close();
+          } catch {
+            // Ignore
+          }
+          wsRef.current = null;
         }
-        setConnectionError('Connection to Live voice server failed. Check your network or API key.');
-        setIsConnecting(false);
-        setIsConnected(false);
-        isConnectingRef.current = false;
+        // Seamless fallback to direct Live API!
+        await connectDirectLiveAPI();
       };
 
       socket.onclose = () => {
@@ -324,12 +525,10 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
         sessionReadyRef.current = false;
       };
     } catch (wsErr: any) {
-      console.error('Error opening live WebSocket:', wsErr);
-      setConnectionError(wsErr?.message || 'Failed to open voice connection.');
-      setIsConnecting(false);
-      isConnectingRef.current = false;
+      console.warn('Failed to open live WebSocket, falling back to direct connection:', wsErr);
+      await connectDirectLiveAPI();
     }
-  }, [scenario, selectedVoice]);
+  }, [scenario, selectedVoice, connectDirectLiveAPI]);
 
   // Consolidated lifecycle controller (single mount and scenario/voice switch)
   useEffect(() => {
@@ -410,19 +609,25 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
     if (playerRef.current) {
       playerRef.current.setMuted(nextMuted);
     }
-    if (nextMuted && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: 'audio_end' }));
+    if (nextMuted) {
+      if (liveSessionRef.current) {
+        liveSessionRef.current.sendRealtimeInput({ audioStreamEnd: true });
+      } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: 'audio_end' }));
+      }
     }
   };
 
   const handleSendText = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!textInput.trim() || !wsRef.current) return;
+    if (!textInput.trim()) return;
     const msg = textInput.trim();
     setTextInput('');
     appendUserTurn(msg);
 
-    if (wsRef.current.readyState === WebSocket.OPEN) {
+    if (liveSessionRef.current) {
+      liveSessionRef.current.sendRealtimeInput({ text: msg });
+    } else if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: 'text', text: msg }));
     }
   };
@@ -508,21 +713,54 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
 
       {/* Connection Error Banner */}
       {connectionError && (
-        <div className="bg-rose-950/50 border border-rose-800/80 rounded-xl p-3.5 flex items-center justify-between text-xs text-rose-200 animate-fadeIn">
-          <div className="flex items-center space-x-2">
-            <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-            <span>{connectionError}</span>
+        <div className="bg-rose-950/50 border border-rose-800/80 rounded-xl p-3.5 flex flex-col gap-2 text-xs text-rose-200 animate-fadeIn">
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-start space-x-2">
+              <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+              <span>{connectionError}</span>
+            </div>
+            <button
+              onClick={() => {
+                isConnectingRef.current = false;
+                startSession();
+              }}
+              className="px-3.5 py-1.5 bg-rose-800 hover:bg-rose-700 text-white rounded-lg font-bold transition shadow-md cursor-pointer flex items-center gap-1.5 shrink-0"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              <span>Retry</span>
+            </button>
           </div>
-          <button
-            onClick={() => {
-              isConnectingRef.current = false;
-              startSession();
-            }}
-            className="px-3.5 py-1.5 bg-rose-800 hover:bg-rose-700 text-white rounded-lg font-bold transition shadow-md cursor-pointer flex items-center gap-1.5"
-          >
-            <RefreshCw className="w-3.5 h-3.5" />
-            <span>Retry Connection</span>
-          </button>
+
+          {/* Inline Key Prompt if missing on Vercel */}
+          {showApiKeyPrompt && (
+            <div className="pt-2 border-t border-rose-800/60 flex flex-col sm:flex-row items-center gap-2">
+              <div className="flex items-center space-x-1.5 text-slate-300 text-[11px] shrink-0">
+                <Key className="w-3.5 h-3.5 text-amber-400" />
+                <span>Enter Gemini API Key:</span>
+              </div>
+              <input
+                type="password"
+                placeholder="AIzaSy..."
+                value={customKeyInput}
+                onChange={(e) => setCustomKeyInput(e.target.value)}
+                className="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500 w-full"
+              />
+              <button
+                onClick={() => {
+                  if (customKeyInput.trim()) {
+                    localStorage.setItem('lingualive_gemini_key', customKeyInput.trim());
+                    setShowApiKeyPrompt(false);
+                    isConnectingRef.current = false;
+                    startSession();
+                  }
+                }}
+                disabled={!customKeyInput.trim()}
+                className="px-3 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-40 text-white rounded-lg font-bold text-xs transition shrink-0 cursor-pointer"
+              >
+                Save & Connect
+              </button>
+            </div>
+          )}
         </div>
       )}
 

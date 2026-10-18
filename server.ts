@@ -29,6 +29,36 @@ app.get('/api/health', (_req: Request, res: Response) => {
   });
 });
 
+// Ephemeral token endpoint for secure client Live API connections
+app.post('/api/live-token', async (_req: Request, res: Response) => {
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return res.status(500).json({
+      error: 'GEMINI_API_KEY is not configured on the server.',
+    });
+  }
+
+  try {
+    const tokenAi = new GoogleGenAI({
+      apiKey,
+      httpOptions: { apiVersion: 'v1alpha' },
+    });
+
+    const token = await tokenAi.authTokens.create({
+      config: {
+        uses: 1,
+      },
+    });
+
+    res.json({ token: token.name });
+  } catch (error: any) {
+    console.error('Failed to create ephemeral live token:', error);
+    res.status(500).json({
+      error: error?.message || 'Failed to mint ephemeral live token.',
+    });
+  }
+});
+
 // Standard text / interactive chat partner endpoint using gemini-3.8-flash
 app.post('/api/chat', async (req: Request, res: Response) => {
   try {

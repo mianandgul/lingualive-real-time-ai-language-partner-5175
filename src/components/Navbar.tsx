@@ -8,6 +8,8 @@ import {
   Smartphone,
 } from 'lucide-react';
 
+import { LinguaLiveLogo } from './LinguaLiveLogo';
+
 interface NavbarProps {
   currentTab: 'scenarios' | 'live' | 'chat' | 'vault';
   onSelectTab: (tab: 'scenarios' | 'live' | 'chat' | 'vault') => void;
@@ -32,22 +34,9 @@ export const Navbar: React.FC<NavbarProps> = ({
         {/* Brand Logo */}
         <div
           onClick={() => onSelectTab('scenarios')}
-          className="flex items-center space-x-2 sm:space-x-2.5 cursor-pointer select-none group shrink-0"
+          className="cursor-pointer select-none group shrink-0"
         >
-          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-xl bg-gradient-to-tr from-indigo-600 via-purple-600 to-pink-500 flex items-center justify-center shadow-lg shadow-indigo-600/30 group-hover:scale-105 transition">
-            <Mic className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
-          </div>
-          <div>
-            <div className="flex items-center space-x-1.5">
-              <span className="font-extrabold text-sm sm:text-base tracking-tight text-white group-hover:text-indigo-300 transition">
-                LinguaLive
-              </span>
-              <span className="text-[9px] sm:text-[10px] font-bold px-1.5 py-0.2 rounded bg-purple-500/20 text-purple-300 border border-purple-500/30 uppercase tracking-wider">
-                LIVE
-              </span>
-            </div>
-            <p className="text-[10px] text-slate-400 hidden md:block">Real-Time AI Language Partner</p>
-          </div>
+          <LinguaLiveLogo size="md" />
         </div>
 
         {/* Navigation Tabs */}

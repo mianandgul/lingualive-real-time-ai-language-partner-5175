@@ -556,6 +556,9 @@ Key guidelines for voice conversation:
 async function startServer() {
   const isProd = process.env.NODE_ENV === 'production';
 
+  // Serve static assets from public folder directly (verification files, manifests, icons)
+  app.use(express.static(path.resolve(process.cwd(), 'public')));
+
   if (!isProd) {
     const { createServer: createViteServer } = await import('vite');
     const vite = await createViteServer({

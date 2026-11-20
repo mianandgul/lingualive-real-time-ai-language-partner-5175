@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Scenario, LearnerLevel } from '../types';
+import { Scenario, LearnerLevel, UserProgressState } from '../types';
 import { PRESET_SCENARIOS, SUPPORTED_LANGUAGES } from '../data/scenarios';
+import { getDailyMissionsStatus, getUserLevelInfo } from '../services/learningStorage';
 import {
   Sparkles,
   Search,
@@ -8,18 +9,156 @@ import {
   Play,
   X,
   Target,
+  Trash2,
+  Flame,
+  Trophy,
+  Loader2,
+  Wand2,
+  ArrowRight,
+  AlertCircle,
 } from 'lucide-react';
 
 interface ScenarioPickerProps {
   onSelectScenario: (scenario: Scenario) => void;
   selectedLanguage: string;
   onLanguageChange: (langName: string) => void;
+  customScenarios: Scenario[];
+  onSaveCustomScenario: (scenario: Scenario) => void;
+  onDeleteCustomScenario: (id: string) => void;
+  userProgress: UserProgressState;
+  onOpenDashboard: () => void;
 }
+
+interface ScenarioTemplate {
+  label: string;
+  icon: string;
+  title: string;
+  partnerRole: string;
+  userRole: string;
+  aiPersonality: string;
+  situation: string;
+  level: LearnerLevel;
+}
+
+const CUSTOM_SCENARIO_TEMPLATES: ScenarioTemplate[] = [
+  {
+    label: 'Job Interview',
+    icon: '💼',
+    title: 'Software Role Job Interview',
+    partnerRole: 'Hiring Manager (Elena)',
+    userRole: 'Job Candidate',
+    aiPersonality: 'Professional & Formal',
+    situation:
+      'You are interviewing for a team role. Answer questions about your background, strengths, and why you want to join.',
+    level: 'Intermediate',
+  },
+  {
+    label: 'Airport Immigration',
+    icon: '🛂',
+    title: 'Airport Passport Control',
+    partnerRole: 'Immigration Officer',
+    userRole: 'Arriving Traveler',
+    aiPersonality: 'Direct & Realistic',
+    situation:
+      'You just landed at an international airport. Explain the purpose of your visit, how long you are staying, and where you will lodge.',
+    level: 'Beginner',
+  },
+  {
+    label: 'Hotel Reception',
+    icon: '🏨',
+    title: 'Hotel Check-In & Room Request',
+    partnerRole: 'Front Desk Receptionist',
+    userRole: 'Hotel Guest',
+    aiPersonality: 'Warm & Encouraging',
+    situation:
+      'You are checking in for a three-night stay and want to confirm breakfast hours and ask for a quiet room on a higher floor.',
+    level: 'Beginner',
+  },
+  {
+    label: 'Restaurant Ordering',
+    icon: '🍽️',
+    title: 'Ordering Dinner at a Bistro',
+    partnerRole: 'Attentive Server',
+    userRole: 'Diner',
+    aiPersonality: 'Friendly & Casual',
+    situation:
+      'Order a starter, main course, and drink, ask about ingredients for an allergy, and ask for the bill politely at the end.',
+    level: 'Beginner',
+  },
+  {
+    label: 'Doctor Appointment',
+    icon: '🩺',
+    title: 'Clinic Consultation & Symptoms',
+    partnerRole: 'General Physician',
+    userRole: 'Patient',
+    aiPersonality: 'Patient Coach',
+    situation:
+      'Describe having a sore throat and mild fever for two days, answer questions about allergies, and confirm prescription instructions.',
+    level: 'Intermediate',
+  },
+  {
+    label: 'Business Meeting',
+    icon: '📊',
+    title: 'Client Project Kickoff',
+    partnerRole: 'Account Director',
+    userRole: 'Project Lead',
+    aiPersonality: 'Professional & Formal',
+    situation:
+      'Align with an international client on project deliverables, next week milestones, and communication cadence.',
+    level: 'Advanced',
+  },
+  {
+    label: 'Making New Friends',
+    icon: '👋',
+    title: 'Meeting Locals at a Meetup',
+    partnerRole: 'Friendly Local Resident',
+    userRole: 'Newcomer in Town',
+    aiPersonality: 'Friendly & Casual',
+    situation:
+      'Introduce yourself at a community coffee meetup, share hobbies, and ask for neighborhood recommendations.',
+    level: 'Beginner',
+  },
+  {
+    label: 'Shopping',
+    icon: '🛍️',
+    title: 'Clothing Store Sizing & Exchange',
+    partnerRole: 'Boutique Associate',
+    userRole: 'Shopper',
+    aiPersonality: 'Warm & Encouraging',
+    situation:
+      'Ask to try on a jacket in a different size, inquire about fabric care, and check the return policy.',
+    level: 'Beginner',
+  },
+  {
+    label: 'University Admission Interview',
+    icon: '🎓',
+    title: 'University Admissions Interview',
+    partnerRole: 'Admissions Committee Member',
+    userRole: 'Prospective Student',
+    aiPersonality: 'Professional & Formal',
+    situation:
+      'Discuss your academic interests, research goals, and why you chose this degree program.',
+    level: 'Advanced',
+  },
+];
+
+const AI_PERSONALITIES = [
+  'Warm & Encouraging',
+  'Professional & Formal',
+  'Friendly & Casual',
+  'Patient Coach',
+  'Direct & Realistic',
+];
 
 export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
   onSelectScenario,
   selectedLanguage,
   onLanguageChange,
+  customScenarios,
+  onSaveCustomScenario,
+  onDeleteCustomScenario,
+  userProgress,
+  onOpenDashboard,
 }) => {
   const [selectedCategory, setSelectedCategory] = useState<string>('All');
   const [selectedLevel, setSelectedLevel] = useState<string>('All');
@@ -28,60 +167,169 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
 
   // Custom Scenario form state
   const [customTitle, setCustomTitle] = useState('');
-  const [customLanguage, setCustomLanguage] = useState(selectedLanguage === 'All' ? 'Spanish' : selectedLanguage);
+  const [customLanguage, setCustomLanguage] = useState(
+    selectedLanguage === 'All' ? 'Spanish' : selectedLanguage
+  );
   const [customLevel, setCustomLevel] = useState<LearnerLevel>('Beginner');
-  const [customCategory, setCustomCategory] = useState<'Dining' | 'Travel' | 'Social' | 'Work' | 'Everyday'>('Dining');
   const [customPartnerRole, setCustomPartnerRole] = useState('');
+  const [customPersonality, setCustomPersonality] = useState('Warm & Encouraging');
   const [customUserRole, setCustomUserRole] = useState('');
   const [customDescription, setCustomDescription] = useState('');
-  const [customGreeting, setCustomGreeting] = useState('');
+  const [customIcon, setCustomIcon] = useState('✨');
+  const [isGenerating, setIsGenerating] = useState(false);
+  const [generateError, setGenerateError] = useState<string | null>(null);
 
-  const categories = ['All', 'Dining', 'Travel', 'Work', 'Everyday'];
+  const categories = ['All', 'Custom', 'Dining', 'Travel', 'Work', 'Everyday'];
   const levels = ['All', 'Beginner', 'Intermediate', 'Advanced'];
 
+  const allScenarios = [...customScenarios, ...PRESET_SCENARIOS];
+
   // Filtered scenarios
-  const filteredScenarios = PRESET_SCENARIOS.filter((s) => {
-    const matchLang = selectedLanguage === 'All' || s.language.toLowerCase() === selectedLanguage.toLowerCase();
-    const matchCat = selectedCategory === 'All' || s.category === selectedCategory;
+  const filteredScenarios = allScenarios.filter((s) => {
+    const matchLang =
+      selectedLanguage === 'All' || s.language.toLowerCase() === selectedLanguage.toLowerCase();
+    const matchCat =
+      selectedCategory === 'All' ||
+      (selectedCategory === 'Custom' ? Boolean(s.isCustom) || s.category === 'Custom' : s.category === selectedCategory);
     const matchLevel = selectedLevel === 'All' || s.level === selectedLevel;
     const matchQuery =
       searchQuery === '' ||
       s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
       s.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      s.language.toLowerCase().includes(searchQuery.toLowerCase());
+      s.language.toLowerCase().includes(searchQuery.toLowerCase()) ||
+      s.partnerRole.toLowerCase().includes(searchQuery.toLowerCase());
     return matchLang && matchCat && matchLevel && matchQuery;
   });
 
-  const handleCreateCustomScenario = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!customTitle || !customPartnerRole) return;
+  const levelInfo = getUserLevelInfo(userProgress.xp);
+  const dailyMissions = getDailyMissionsStatus(userProgress);
+  const completedMissionsCount = dailyMissions.filter((m) => m.completed).length;
+
+  const openModalWithDefaults = () => {
+    setCustomLanguage(selectedLanguage === 'All' ? 'Spanish' : selectedLanguage);
+    setGenerateError(null);
+    setShowCustomModal(true);
+  };
+
+  const applyTemplate = (tpl: ScenarioTemplate) => {
+    setCustomTitle(tpl.title);
+    setCustomPartnerRole(tpl.partnerRole);
+    setCustomUserRole(tpl.userRole);
+    setCustomPersonality(tpl.aiPersonality);
+    setCustomDescription(tpl.situation);
+    setCustomLevel(tpl.level);
+    setCustomIcon(tpl.icon);
+    setGenerateError(null);
+  };
+
+  const buildAndLaunchScenario = (generated: any, usedFallback: boolean) => {
+    const fallbackObjectives = [
+      {
+        id: 'custom-1',
+        title: 'Greet and set context',
+        description: 'Open the conversation naturally in character',
+        completed: false,
+      },
+      {
+        id: 'custom-2',
+        title: 'Communicate your main goal',
+        description: 'Ask or answer key questions clearly',
+        completed: false,
+      },
+      {
+        id: 'custom-3',
+        title: 'Wrap up politely',
+        description: 'Conclude the exchange naturally',
+        completed: false,
+      },
+    ];
 
     const newScenario: Scenario = {
-      id: `custom-${Date.now()}`,
-      title: customTitle,
-      description: customDescription || `A custom conversation scenario in ${customLanguage}.`,
-      category: customCategory,
+      id: `custom-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      title: customTitle.trim(),
+      description:
+        customDescription.trim() ||
+        `A ${customLevel.toLowerCase()} ${customLanguage} roleplay with ${customPartnerRole.trim()}.`,
+      category: 'Custom',
       language: customLanguage,
       level: customLevel,
-      cefr: customLevel === 'Beginner' ? 'A1' : customLevel === 'Intermediate' ? 'B1' : 'C1',
-      icon: '✨',
-      partnerRole: customPartnerRole,
-      userRole: customUserRole || 'Learner practicing conversation',
-      register: 'Standard Polite',
-      culturalEtiquetteNote: 'Speak clearly and observe polite conversational turn-taking.',
-      starterPrompt: `Roleplay as ${customPartnerRole} in ${customLanguage}. The user is ${customUserRole}.`,
-      starterGreeting: customGreeting || '¡Hola! ¿Cómo estás?',
-      starterTranslation: 'Hello! How are you?',
-      objectives: [
-        { id: 'custom-1', title: 'Start the conversation', description: 'Introduce yourself politely', completed: false },
-        { id: 'custom-2', title: 'Engage with the scenario', description: 'Ask a relevant question', completed: false },
-        { id: 'custom-3', title: 'Conclude naturally', description: 'Wrap up your exchange politely', completed: false },
-      ],
-      usefulPhrases: [],
+      cefr: customLevel === 'Beginner' ? 'A2' : customLevel === 'Intermediate' ? 'B1' : 'C1',
+      icon: customIcon || '✨',
+      partnerRole: customPartnerRole.trim(),
+      userRole: customUserRole.trim() || 'Language Learner',
+      aiPersonality: customPersonality,
+      isCustom: true,
+      createdAt: Date.now(),
+      register: customPersonality.includes('Formal') ? 'Formal / Business' : 'Standard Polite',
+      culturalEtiquetteNote:
+        generated?.culturalEtiquetteNote ||
+        `Match the tone of your partner (${customPersonality}) and speak clearly in ${customLanguage}.`,
+      starterPrompt: `Roleplay as ${customPartnerRole.trim()} (${customPersonality}) speaking in ${customLanguage} at ${customLevel} level. The user is ${customUserRole.trim() || 'a language learner'}. Situation: ${customDescription.trim() || customTitle.trim()}.`,
+      starterGreeting:
+        generated?.starterGreeting ||
+        (usedFallback ? `Hello! (${customTitle.trim()} — speak in ${customLanguage})` : 'Hello!'),
+      starterTranslation:
+        generated?.starterTranslation ||
+        `Hello! Welcome to "${customTitle.trim()}". Let's begin.`,
+      starterPhonetics: generated?.starterPhonetics || undefined,
+      objectives:
+        Array.isArray(generated?.objectives) && generated.objectives.length > 0
+          ? generated.objectives.map((o: any, idx: number) => ({
+              id: o.id || `custom-${idx + 1}`,
+              title: o.title || `Objective ${idx + 1}`,
+              description: o.description || 'Complete this conversational goal',
+              completed: false,
+            }))
+          : fallbackObjectives,
+      usefulPhrases: Array.isArray(generated?.usefulPhrases) ? generated.usefulPhrases : [],
     };
 
+    onSaveCustomScenario(newScenario);
     setShowCustomModal(false);
+    setCustomTitle('');
+    setCustomPartnerRole('');
+    setCustomUserRole('');
+    setCustomDescription('');
+    setCustomIcon('✨');
     onSelectScenario(newScenario);
+  };
+
+  const handleCreateCustomScenario = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!customTitle.trim() || !customPartnerRole.trim() || isGenerating) return;
+
+    setIsGenerating(true);
+    setGenerateError(null);
+
+    try {
+      const res = await fetch('/api/generate-scenario', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: customTitle.trim(),
+          language: customLanguage,
+          level: customLevel,
+          aiCharacter: customPartnerRole.trim(),
+          aiPersonality: customPersonality,
+          userRole: customUserRole.trim() || 'Language Learner',
+          situation: customDescription.trim() || customTitle.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        const errBody = await res.json().catch(() => ({}));
+        throw new Error(errBody.error || 'Unable to generate custom scenario details');
+      }
+
+      const generated = await res.json();
+      buildAndLaunchScenario(generated, false);
+    } catch (err: any) {
+      setGenerateError(
+        err?.message || 'AI scenario setup failed. You can retry or launch directly.'
+      );
+    } finally {
+      setIsGenerating(false);
+    }
   };
 
   return (
@@ -89,30 +337,73 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
       {/* Hero Welcome Header */}
       <div className="relative rounded-3xl bg-gradient-to-r from-indigo-900/60 via-purple-900/40 to-slate-900 border border-indigo-700/40 p-6 sm:p-8 overflow-hidden shadow-2xl backdrop-blur-md">
         <div className="absolute right-0 top-0 -mt-10 -mr-10 w-80 h-80 bg-indigo-500/10 rounded-full blur-3xl pointer-events-none" />
-        <div className="relative z-10 max-w-2xl space-y-3">
-          <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-xs font-semibold">
-            <Sparkles className="w-3.5 h-3.5" />
-            <span>Real-Time Interactive Voice Practice</span>
-          </div>
-          <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
-            Conversational Fluency, <br />
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 via-purple-300 to-cyan-300">
-              One Natural Voice Dialogue at a Time.
-            </span>
-          </h1>
-          <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
-            Practice realistic conversations with an encouraging AI native speaker. Interrupt anytime, get instant phonetic tips, explore word breakdowns, and achieve scenario missions.
-          </p>
+        <div className="relative z-10 flex flex-col lg:flex-row lg:items-end justify-between gap-6">
+          <div className="max-w-2xl space-y-3">
+            <div className="inline-flex items-center space-x-2 px-3 py-1 rounded-full bg-indigo-500/20 border border-indigo-500/30 text-indigo-300 text-xs font-semibold">
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Real-Time Interactive Voice Practice</span>
+            </div>
+            <h1 className="text-2xl sm:text-4xl font-extrabold text-white tracking-tight">
+              Conversational Fluency, <br />
+              <span className="text-transparent bg-clip-text bg-gradient-to-r from-indigo-300 via-purple-300 to-cyan-300">
+                One Natural Voice Dialogue at a Time.
+              </span>
+            </h1>
+            <p className="text-sm sm:text-base text-slate-300 leading-relaxed">
+              Practice realistic conversations with an encouraging AI native speaker. Interrupt anytime, get instant phonetic tips, explore word breakdowns, and achieve scenario missions.
+            </p>
 
-          <div className="pt-2 flex flex-wrap gap-3">
-            <button
-              onClick={() => setShowCustomModal(true)}
-              className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-xs sm:text-sm shadow-lg shadow-indigo-600/30 transition"
-            >
-              <PlusCircle className="w-4 h-4" />
-              <span>Create Custom Roleplay</span>
-            </button>
+            <div className="pt-2 flex flex-wrap gap-3">
+              <button
+                onClick={openModalWithDefaults}
+                className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white font-semibold text-xs sm:text-sm shadow-lg shadow-indigo-600/30 transition cursor-pointer"
+              >
+                <PlusCircle className="w-4 h-4" />
+                <span>Create Custom Scenario</span>
+              </button>
+              <button
+                onClick={onOpenDashboard}
+                className="inline-flex items-center space-x-2 px-4 py-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-700/70 text-slate-200 font-semibold text-xs sm:text-sm transition cursor-pointer"
+              >
+                <Trophy className="w-4 h-4 text-amber-400" />
+                <span>Daily Missions ({completedMissionsCount}/5)</span>
+              </button>
+            </div>
           </div>
+
+          {/* Compact Progress Strip */}
+          <button
+            type="button"
+            onClick={onOpenDashboard}
+            className="text-left bg-slate-950/75 hover:bg-slate-900/90 border border-indigo-500/30 rounded-2xl p-4 w-full lg:w-72 space-y-2.5 transition group cursor-pointer shrink-0"
+          >
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-bold text-indigo-300">
+                Level {levelInfo.level} · {levelInfo.title}
+              </span>
+              <ArrowRight className="w-3.5 h-3.5 text-slate-400 group-hover:text-indigo-300 group-hover:translate-x-0.5 transition" />
+            </div>
+
+            <div className="w-full h-1.5 rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 rounded-full transition-all"
+                style={{ width: `${levelInfo.progressPercent}%` }}
+              />
+            </div>
+
+            <div className="flex items-center justify-between text-xs pt-0.5">
+              <span className="font-bold text-white tabular-nums">
+                {userProgress.xp} <span className="text-slate-400 font-medium">XP</span>
+              </span>
+              <span className="flex items-center gap-1 font-semibold text-amber-300 tabular-nums">
+                <Flame className="w-3.5 h-3.5 text-amber-400" />
+                {userProgress.streakDays}d streak
+              </span>
+              <span className="text-emerald-300 font-semibold tabular-nums">
+                {completedMissionsCount}/5 goals
+              </span>
+            </div>
+          </button>
         </div>
       </div>
 
@@ -124,7 +415,7 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
         <div className="flex items-center gap-2 overflow-x-auto pb-2 scrollbar-none">
           <button
             onClick={() => onLanguageChange('All')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 ${
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
               selectedLanguage === 'All'
                 ? 'bg-indigo-600 text-white shadow-md'
                 : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
@@ -136,7 +427,7 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
             <button
               key={lang.id}
               onClick={() => onLanguageChange(lang.name)}
-              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 ${
+              className={`flex items-center space-x-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition shrink-0 cursor-pointer ${
                 selectedLanguage === lang.name
                   ? 'bg-indigo-600 text-white shadow-md'
                   : 'bg-slate-800/80 hover:bg-slate-700 text-slate-300'
@@ -167,12 +458,12 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
         {/* Level and Category Filters */}
         <div className="flex items-center gap-2 w-full sm:w-auto overflow-x-auto">
           {/* Level Filter */}
-          <div className="flex items-center space-x-1 bg-slate-950/80 border border-slate-700/60 rounded-xl p-1 text-xs">
+          <div className="flex items-center space-x-1 bg-slate-950/80 border border-slate-700/60 rounded-xl p-1 text-xs shrink-0">
             {levels.map((lvl) => (
               <button
                 key={lvl}
                 onClick={() => setSelectedLevel(lvl)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer whitespace-nowrap ${
                   selectedLevel === lvl
                     ? 'bg-indigo-600 text-white'
                     : 'text-slate-400 hover:text-slate-200'
@@ -184,12 +475,12 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
           </div>
 
           {/* Category Filter */}
-          <div className="flex items-center space-x-1 bg-slate-950/80 border border-slate-700/60 rounded-xl p-1 text-xs">
+          <div className="flex items-center space-x-1 bg-slate-950/80 border border-slate-700/60 rounded-xl p-1 text-xs shrink-0">
             {categories.map((cat) => (
               <button
                 key={cat}
                 onClick={() => setSelectedCategory(cat)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition ${
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold transition cursor-pointer whitespace-nowrap ${
                   selectedCategory === cat
                     ? 'bg-purple-600 text-white'
                     : 'text-slate-400 hover:text-slate-200'
@@ -211,11 +502,16 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
           >
             <div className="space-y-3">
               {/* Top Row: Icon, Badges */}
-              <div className="flex items-start justify-between">
+              <div className="flex items-start justify-between gap-2">
                 <span className="text-3xl p-2.5 rounded-xl bg-slate-800 border border-slate-700/70 group-hover:scale-105 transition">
                   {scenario.icon}
                 </span>
-                <div className="flex items-center space-x-1.5">
+                <div className="flex items-center flex-wrap justify-end gap-1.5">
+                  {scenario.isCustom && (
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-950/70 text-indigo-300 border border-indigo-700/60 uppercase">
+                      Custom
+                    </span>
+                  )}
                   <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-800 text-slate-300 border border-slate-700 uppercase">
                     {scenario.language}
                   </span>
@@ -245,20 +541,36 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
 
               {/* Role details */}
               <div className="p-2.5 rounded-xl bg-slate-950/60 border border-slate-800/80 text-[11px] space-y-1">
-                <div className="flex items-center justify-between text-slate-400">
+                <div className="flex items-center justify-between text-slate-400 gap-2">
                   <span>AI Partner:</span>
-                  <span className="font-semibold text-slate-200">{scenario.partnerRole}</span>
+                  <span className="font-semibold text-slate-200 truncate">
+                    {scenario.partnerRole}
+                    {scenario.aiPersonality ? ` (${scenario.aiPersonality})` : ''}
+                  </span>
                 </div>
-                <div className="flex items-center justify-between text-slate-400">
+                <div className="flex items-center justify-between text-slate-400 gap-2">
                   <span>Your Role:</span>
-                  <span className="font-semibold text-slate-200">{scenario.userRole}</span>
+                  <span className="font-semibold text-slate-200 truncate">{scenario.userRole}</span>
                 </div>
               </div>
 
               {/* Scenario Objectives Count */}
-              <div className="flex items-center space-x-1.5 text-[11px] text-slate-400">
-                <Target className="w-3.5 h-3.5 text-indigo-400" />
-                <span>{scenario.objectives.length} interactive practice missions</span>
+              <div className="flex items-center justify-between text-[11px] text-slate-400">
+                <span className="flex items-center space-x-1.5">
+                  <Target className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>{scenario.objectives.length} interactive practice missions</span>
+                </span>
+                {scenario.isCustom && (
+                  <button
+                    type="button"
+                    onClick={() => onDeleteCustomScenario(scenario.id)}
+                    className="p-1 rounded-lg text-slate-500 hover:text-rose-400 hover:bg-rose-950/30 transition cursor-pointer"
+                    title="Delete custom scenario"
+                    aria-label="Delete custom scenario"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
             </div>
 
@@ -267,7 +579,7 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
               <span className="text-[11px] font-medium text-indigo-400">Real-Time Voice</span>
               <button
                 onClick={() => onSelectScenario(scenario)}
-                className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition shadow-md group-hover:translate-x-0.5"
+                className="flex items-center space-x-1.5 px-3.5 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-xs transition shadow-md group-hover:translate-x-0.5 cursor-pointer"
               >
                 <span>Start Call</span>
                 <Play className="w-3.5 h-3.5 fill-current" />
@@ -280,52 +592,85 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
       {filteredScenarios.length === 0 && (
         <div className="text-center py-12 bg-slate-900/40 rounded-2xl border border-slate-800 space-y-3">
           <p className="text-slate-400 text-sm">No scenarios match your current filter.</p>
-          <button
-            onClick={() => {
-              setSelectedCategory('All');
-              setSelectedLevel('All');
-              setSearchQuery('');
-            }}
-            className="text-xs text-indigo-400 underline hover:text-indigo-300"
-          >
-            Clear filters
-          </button>
+          <div className="flex items-center justify-center gap-4">
+            <button
+              onClick={() => {
+                setSelectedCategory('All');
+                setSelectedLevel('All');
+                setSearchQuery('');
+              }}
+              className="text-xs text-indigo-400 underline hover:text-indigo-300 cursor-pointer"
+            >
+              Clear filters
+            </button>
+            <button
+              onClick={openModalWithDefaults}
+              className="text-xs text-purple-300 underline hover:text-purple-200 cursor-pointer"
+            >
+              Create custom scenario
+            </button>
+          </div>
         </div>
       )}
 
-      {/* Custom Scenario Builder Modal */}
+      {/* AI Custom Scenario Creator Modal */}
       {showCustomModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-lg w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl max-w-2xl w-full max-h-[92vh] flex flex-col shadow-2xl overflow-hidden">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/70">
               <div className="flex items-center space-x-2">
-                <Sparkles className="w-4 h-4 text-indigo-400" />
-                <h3 className="font-bold text-white text-sm">Create Custom Roleplay Scenario</h3>
+                <Wand2 className="w-4 h-4 text-indigo-400" />
+                <h3 className="font-bold text-white text-sm">AI Custom Scenario Creator</h3>
               </div>
               <button
-                onClick={() => setShowCustomModal(false)}
-                className="p-1.5 text-slate-400 hover:text-slate-200"
+                onClick={() => !isGenerating && setShowCustomModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-200 cursor-pointer"
+                aria-label="Close modal"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <form onSubmit={handleCreateCustomScenario} className="p-5 overflow-y-auto space-y-4">
+              {/* Quick-fill real-life scenario templates */}
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                  Real-Life Scenario Templates (Quick Fill)
+                </label>
+                <div className="flex flex-wrap gap-1.5">
+                  {CUSTOM_SCENARIO_TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.label}
+                      type="button"
+                      onClick={() => applyTemplate(tpl)}
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-800/90 hover:bg-indigo-600/30 border border-slate-700 hover:border-indigo-500/60 text-xs text-slate-200 transition cursor-pointer"
+                    >
+                      <span>{tpl.icon}</span>
+                      <span>{tpl.label}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Scenario Title</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Scenario Title
+                </label>
                 <input
                   type="text"
                   required
                   value={customTitle}
                   onChange={(e) => setCustomTitle(e.target.value)}
-                  placeholder="e.g., Ordering Street Tacos in Mexico City"
+                  placeholder="e.g., Airport Immigration Check or Job Interview"
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Language</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Target Language
+                  </label>
                   <select
                     value={customLanguage}
                     onChange={(e) => setCustomLanguage(e.target.value)}
@@ -333,13 +678,15 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
                   >
                     {SUPPORTED_LANGUAGES.map((l) => (
                       <option key={l.id} value={l.name}>
-                        {l.flag} {l.name}
+                        {l.flag} {l.name} ({l.nativeName})
                       </option>
                     ))}
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Level</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    Difficulty Level
+                  </label>
                   <select
                     value={customLevel}
                     onChange={(e) => setCustomLevel(e.target.value as LearnerLevel)}
@@ -352,67 +699,103 @@ export const ScenarioPicker: React.FC<ScenarioPickerProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Partner Role</label>
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    AI Character Role
+                  </label>
                   <input
                     type="text"
                     required
                     value={customPartnerRole}
                     onChange={(e) => setCustomPartnerRole(e.target.value)}
-                    placeholder="e.g., Taco Vendor (Carlos)"
+                    placeholder="e.g., Hiring Manager, Hotel Receptionist"
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-300 mb-1">Your Role</label>
-                  <input
-                    type="text"
-                    value={customUserRole}
-                    onChange={(e) => setCustomUserRole(e.target.value)}
-                    placeholder="e.g., Hungry Traveler"
+                  <label className="block text-xs font-semibold text-slate-300 mb-1">
+                    AI Character Personality
+                  </label>
+                  <select
+                    value={customPersonality}
+                    onChange={(e) => setCustomPersonality(e.target.value)}
                     className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
-                  />
+                  >
+                    {AI_PERSONALITIES.map((p) => (
+                      <option key={p} value={p}>
+                        {p}
+                      </option>
+                    ))}
+                  </select>
                 </div>
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">
-                  Starter Greeting (in target language)
-                </label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">Your Role</label>
                 <input
                   type="text"
-                  value={customGreeting}
-                  onChange={(e) => setCustomGreeting(e.target.value)}
-                  placeholder="e.g., ¡Hola! ¿Cuántos tacos te preparo hoy?"
+                  value={customUserRole}
+                  onChange={(e) => setCustomUserRole(e.target.value)}
+                  placeholder="e.g., Traveler, Candidate, Patient, Guest"
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-300 mb-1">Context / Description</label>
+                <label className="block text-xs font-semibold text-slate-300 mb-1">
+                  Describe the Situation
+                </label>
                 <textarea
                   value={customDescription}
                   onChange={(e) => setCustomDescription(e.target.value)}
-                  rows={2}
-                  placeholder="Describe the setting and situation..."
+                  rows={3}
+                  placeholder="Describe what happens in this conversation, key topics to cover, or specific goals..."
                   className="w-full bg-slate-950 border border-slate-700 rounded-xl px-3 py-2 text-xs text-slate-100 focus:outline-none focus:border-indigo-500"
                 />
               </div>
 
-              <div className="pt-2 flex justify-end space-x-2">
+              {generateError && (
+                <div className="p-3 rounded-xl bg-rose-950/50 border border-rose-800/60 text-xs text-rose-200 flex items-center justify-between gap-2">
+                  <span className="flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                    {generateError}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => buildAndLaunchScenario({}, true)}
+                    className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-100 font-semibold shrink-0 cursor-pointer"
+                  >
+                    Start Anyway
+                  </button>
+                </div>
+              )}
+
+              <div className="pt-2 flex items-center justify-end space-x-2 border-t border-slate-800/80">
                 <button
                   type="button"
+                  disabled={isGenerating}
                   onClick={() => setShowCustomModal(false)}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium"
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium cursor-pointer disabled:opacity-50"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-lg"
+                  disabled={isGenerating}
+                  className="inline-flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 text-white text-xs font-bold transition shadow-lg cursor-pointer disabled:opacity-60"
                 >
-                  Start Roleplay
+                  {isGenerating ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Preparing AI Roleplay...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play className="w-3.5 h-3.5 fill-current" />
+                      <span>Start AI Voice Conversation</span>
+                    </>
+                  )}
                 </button>
               </div>
             </form>

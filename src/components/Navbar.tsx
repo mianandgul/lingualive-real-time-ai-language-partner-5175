@@ -6,17 +6,22 @@ import {
   BookOpen,
   LayoutGrid,
   Smartphone,
+  Trophy,
 } from 'lucide-react';
 
 import { LinguaLiveLogo } from './LinguaLiveLogo';
 
+export type AppTab = 'scenarios' | 'live' | 'chat' | 'vault' | 'dashboard';
+
 interface NavbarProps {
-  currentTab: 'scenarios' | 'live' | 'chat' | 'vault';
-  onSelectTab: (tab: 'scenarios' | 'live' | 'chat' | 'vault') => void;
+  currentTab: AppTab;
+  onSelectTab: (tab: AppTab) => void;
   selectedLanguage: string;
   onLanguageChange: (lang: string) => void;
   activeScenarioTitle?: string;
   vaultCount: number;
+  xp: number;
+  streakDays: number;
   onOpenAndroidModal: () => void;
 }
 
@@ -26,10 +31,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   selectedLanguage,
   onLanguageChange,
   vaultCount,
+  xp,
   onOpenAndroidModal,
 }) => {
   return (
-    <header className="sticky top-0 z-40 bg-slate-950/80 backdrop-blur-xl border-b border-slate-800/80 px-3 sm:px-6 py-2.5 sm:py-3">
+    <header className="sticky top-0 z-40 bg-slate-950/85 backdrop-blur-xl border-b border-slate-800/80 px-3 sm:px-6 py-2.5 sm:py-3">
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
         {/* Brand Logo */}
         <div
@@ -40,10 +46,10 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Navigation Tabs */}
-        <nav className="flex items-center space-x-1 bg-slate-900/90 border border-slate-800 p-1 rounded-2xl overflow-x-auto">
+        <nav className="flex items-center space-x-1 bg-slate-900/90 border border-slate-800 p-1 rounded-2xl overflow-x-auto scrollbar-none">
           <button
             onClick={() => onSelectTab('scenarios')}
-            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition shrink-0 ${
+            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap shrink-0 cursor-pointer ${
               currentTab === 'scenarios'
                 ? 'bg-indigo-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -55,7 +61,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onSelectTab('live')}
-            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition relative shrink-0 ${
+            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition relative whitespace-nowrap shrink-0 cursor-pointer ${
               currentTab === 'live'
                 ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -68,7 +74,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onSelectTab('chat')}
-            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition shrink-0 ${
+            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap shrink-0 cursor-pointer ${
               currentTab === 'chat'
                 ? 'bg-indigo-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -80,7 +86,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
           <button
             onClick={() => onSelectTab('vault')}
-            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition shrink-0 ${
+            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap shrink-0 cursor-pointer ${
               currentTab === 'vault'
                 ? 'bg-indigo-600 text-white shadow-md'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
@@ -89,8 +95,25 @@ export const Navbar: React.FC<NavbarProps> = ({
             <BookOpen className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Flashcards</span>
             {vaultCount > 0 && (
-              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold bg-indigo-500/30 text-indigo-300">
+              <span className="px-1.5 py-0.2 rounded-full text-[10px] font-bold tabular-nums bg-indigo-500/30 text-indigo-300">
                 {vaultCount}
+              </span>
+            )}
+          </button>
+
+          <button
+            onClick={() => onSelectTab('dashboard')}
+            className={`flex items-center space-x-1 sm:space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl text-xs font-semibold transition whitespace-nowrap shrink-0 cursor-pointer ${
+              currentTab === 'dashboard'
+                ? 'bg-purple-600 text-white shadow-md'
+                : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+            }`}
+          >
+            <Trophy className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Progress</span>
+            {xp > 0 && (
+              <span className="hidden md:inline text-[10px] font-mono tabular-nums text-amber-300">
+                {xp} XP
               </span>
             )}
           </button>
@@ -101,17 +124,18 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Android App / Install Button */}
           <button
             onClick={onOpenAndroidModal}
-            className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition shadow-sm cursor-pointer"
-            title="Install on Android or Package APK"
+            className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition shadow-sm cursor-pointer whitespace-nowrap shrink-0"
+            title="Install on Android"
           >
             <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
-            <span className="hidden xs:inline">Install Android</span>
+            <span className="hidden md:inline">Install Android</span>
           </button>
 
           {/* Target Language Dropdown */}
           <select
             value={selectedLanguage}
             onChange={(e) => onLanguageChange(e.target.value)}
+            aria-label="Filter target language"
             className="bg-slate-900 border border-slate-700/80 rounded-xl px-2 sm:px-2.5 py-1.5 text-xs font-medium text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
           >
             <option value="All">All Languages</option>

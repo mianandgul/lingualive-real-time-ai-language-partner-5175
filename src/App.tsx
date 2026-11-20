@@ -1,19 +1,33 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   Scenario,
   TranscriptItem,
   LiveVoiceName,
   VocabularyItem,
+  MistakeCorrection,
+  ConversationReport,
+  UserProgressState,
 } from './types';
 import { PRESET_SCENARIOS } from './data/scenarios';
-import { Navbar } from './components/Navbar';
+import { Navbar, AppTab } from './components/Navbar';
 import { ScenarioPicker } from './components/ScenarioPicker';
-import { LiveVoiceRoom } from './components/LiveVoiceRoom';
+import { LiveVoiceRoom, EndSessionPayload } from './components/LiveVoiceRoom';
 import { ChatPracticeView } from './components/ChatPracticeView';
 import { VocabularyVault } from './components/VocabularyVault';
+import { LearningDashboard } from './components/LearningDashboard';
 import { WordInspectorModal } from './components/WordInspectorModal';
 import { SessionSummaryModal } from './components/SessionSummaryModal';
 import { AndroidInstallModal } from './components/AndroidInstallModal';
+import {
+  loadCustomScenarios,
+  saveCustomScenarios,
+  loadUserProgress,
+  saveUserProgress,
+  recordCompletedSession,
+  recordVocabLearned,
+  recordMistakeCorrected,
+  mergeVocabItem,
+} from './services/learningStorage';
 
 const DEFAULT_VOCABULARY: VocabularyItem[] = [
   {
@@ -24,6 +38,7 @@ const DEFAULT_VOCABULARY: VocabularyItem[] = [
     exampleSentence: 'Bom dia, queria uma bica e um pastel de nata, se faz favor.',
     exampleTranslation: 'Good morning, I would like an espresso and a custard tart, please.',
     language: 'Portuguese',
+    type: 'phrase',
     learnedAt: Date.now() - 3600000,
     mastered: false,
   },
@@ -35,6 +50,7 @@ const DEFAULT_VOCABULARY: VocabularyItem[] = [
     exampleSentence: '여기요, 삼겹살 2인분하고 공기밥 주세요!',
     exampleTranslation: 'Excuse me, two servings of pork belly and a bowl of rice please!',
     language: 'Korean',
+    type: 'phrase',
     learnedAt: Date.now() - 7200000,
     mastered: false,
   },
@@ -46,6 +62,7 @@ const DEFAULT_VOCABULARY: VocabularyItem[] = [
     exampleSentence: 'I loved the proposal, could you give me a quick walkthrough?',
     exampleTranslation: 'I loved the proposal, could you give me a brief overview?',
     language: 'English',
+    type: 'phrase',
     learnedAt: Date.now() - 14400000,
     mastered: true,
   },
@@ -57,6 +74,7 @@ const DEFAULT_VOCABULARY: VocabularyItem[] = [
     exampleSentence: 'Buenos días, quisiera un café con leche y una tostada.',
     exampleTranslation: 'Good morning, I would like a coffee with milk and toast.',
     language: 'Spanish',
+    type: 'phrase',
     learnedAt: Date.now() - 86400000,
     mastered: true,
   },
@@ -66,18 +84,31 @@ const DEFAULT_VOCABULARY: VocabularyItem[] = [
     translation: 'What do you recommend?',
     pronunciation: 'Osusume wa nan desu ka?',
     exampleSentence: 'すみません、今日のおすすめは何ですか？',
-    exampleTranslation: 'Excuse me, what is today\'s recommendation?',
+    exampleTranslation: "Excuse me, what is today's recommendation?",
     language: 'Japanese',
+    type: 'phrase',
     learnedAt: Date.now() - 28800000,
     mastered: false,
   },
 ];
 
 export default function App() {
-  const [currentTab, setCurrentTab] = useState<'scenarios' | 'live' | 'chat' | 'vault'>('scenarios');
+  const [currentTab, setCurrentTab] = useState<AppTab>('scenarios');
   const [selectedLanguage, setSelectedLanguage] = useState<string>('All');
   const [activeScenario, setActiveScenario] = useState<Scenario>(PRESET_SCENARIOS[0]);
   const [selectedVoice, setSelectedVoice] = useState<LiveVoiceName>('Zephyr');
+
+  // Custom scenarios (persisted in localStorage)
+  const [customScenarios, setCustomScenarios] = useState<Scenario[]>(() => loadCustomScenarios());
+  useEffect(() => {
+    saveCustomScenarios(customScenarios);
+  }, [customScenarios]);
+
+  // Gamification & Progress state (persisted in localStorage)
+  const [userProgress, setUserProgress] = useState<UserProgressState>(() => loadUserProgress());
+  useEffect(() => {
+    saveUserProgress(userProgress);
+  }, [userProgress]);
 
   // Transcripts & Chat state
   const [chatTranscript, setChatTranscript] = useState<TranscriptItem[]>([
@@ -98,18 +129,18 @@ export default function App() {
   // Word inspector modal state
   const [inspectPhrase, setInspectPhrase] = useState<string | null>(null);
 
-  // Session summary modal state
-  const [summaryData, setSummaryData] = useState<{
+  // Session Feedback Report modal state
+  const [summaryState, setSummaryState] = useState<{
     isOpen: boolean;
     scenario: Scenario;
-    transcript: TranscriptItem[];
-    completedObjectives: string[];
+    sessionPayload: EndSessionPayload | null;
+    existingReport: ConversationReport | null;
   } | null>(null);
 
   // Android APK / Install modal state
   const [showAndroidModal, setShowAndroidModal] = useState<boolean>(false);
 
-  // Vocabulary Vault state (persisted in localStorage)
+  // Vocabulary Memory state (persisted in localStorage)
   const [vaultItems, setVaultItems] = useState<VocabularyItem[]>(() => {
     try {
       const saved = localStorage.getItem('lingualive_vocab');
@@ -153,6 +184,15 @@ export default function App() {
     }
   };
 
+  // Custom Scenario CRUD
+  const handleSaveCustomScenario = (scenario: Scenario) => {
+    setCustomScenarios((prev) => [scenario, ...prev.filter((s) => s.id !== scenario.id)]);
+  };
+
+  const handleDeleteCustomScenario = (id: string) => {
+    setCustomScenarios((prev) => prev.filter((s) => s.id !== id));
+  };
+
   // Scenario Selection
   const handleSelectScenario = (scenario: Scenario) => {
     setActiveScenario(scenario);
@@ -170,12 +210,13 @@ export default function App() {
     setCurrentTab('live');
   };
 
-  // Chat message sending with gemini-3.8-flash
+  // Chat message sending with gemini-3.8-flash + Smart Mistake Correction
   const handleSendChatMessage = async (userText: string) => {
     setIsSendingChat(true);
 
+    const userItemId = `user-${Date.now()}`;
     const userItem: TranscriptItem = {
-      id: `user-${Date.now()}`,
+      id: userItemId,
       role: 'user',
       text: userText,
       timestamp: Date.now(),
@@ -192,6 +233,8 @@ export default function App() {
           targetLanguage: activeScenario.language,
           learnerLevel: activeScenario.level,
           scenario: `${activeScenario.title} (${activeScenario.partnerRole})`,
+          aiPersonality: activeScenario.aiPersonality || '',
+          situation: activeScenario.description,
           history: updatedHistory.slice(-8),
           objectives: activeScenario.objectives,
         }),
@@ -199,6 +242,21 @@ export default function App() {
 
       if (!res.ok) throw new Error('Chat partner failed to reply');
       const data = await res.json();
+
+      const rawCorrection = data.mistakeCorrection;
+      const correctionObj: MistakeCorrection | null =
+        rawCorrection && rawCorrection.corrected
+          ? {
+              id: `chat-fix-${userItemId}`,
+              original: rawCorrection.original || userText,
+              intendedMeaning: rawCorrection.intendedMeaning || '',
+              corrected: rawCorrection.corrected,
+              errorType: rawCorrection.errorType || 'Grammar',
+              explanation: rawCorrection.explanation || '',
+              additionalExample: rawCorrection.additionalExample || '',
+              targetLanguage: activeScenario.language,
+            }
+          : null;
 
       const modelItem: TranscriptItem = {
         id: `model-${Date.now()}`,
@@ -210,12 +268,17 @@ export default function App() {
         timestamp: Date.now(),
       };
 
-      setChatTranscript((prev) => [...prev, modelItem]);
+      setChatTranscript((prev) => [
+        ...prev.map((item) =>
+          item.id === userItemId && correctionObj ? { ...item, correction: correctionObj } : item
+        ),
+        modelItem,
+      ]);
+
       if (data.suggestedReplies && data.suggestedReplies.length > 0) {
         setSuggestedReplies(data.suggestedReplies);
       }
 
-      // Auto play partner's response
       if (data.reply) {
         handlePlayTTS(data.reply);
       }
@@ -226,20 +289,75 @@ export default function App() {
     }
   };
 
-  // Vocabulary handlers
-  const handleAddToVault = (item: Omit<VocabularyItem, 'id' | 'learnedAt' | 'mastered'>) => {
-    const newItem: VocabularyItem = {
-      ...item,
-      id: `vocab-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
-      learnedAt: Date.now(),
-      mastered: false,
-    };
-    setVaultItems((prev) => [newItem, ...prev.filter((v) => v.word.toLowerCase() !== item.word.toLowerCase())]);
-  };
+  // Vocabulary Memory handlers (only explicit user-triggered saves)
+  const handleAddToVault = useCallback(
+    (item: Omit<VocabularyItem, 'id' | 'learnedAt' | 'mastered'>) => {
+      const normalizedItem: Omit<VocabularyItem, 'id' | 'learnedAt' | 'mastered'> = {
+        ...item,
+        type: item.type || (item.word.trim().split(/\s+/).length >= 3 ? 'phrase' : 'word'),
+      };
+      setVaultItems((prev) => {
+        const nextVault = mergeVocabItem(prev, normalizedItem);
+        setUserProgress((prog) => {
+          const { nextState } = recordVocabLearned(prog, normalizedItem.word, nextVault.length);
+          return nextState;
+        });
+        return nextVault;
+      });
+    },
+    []
+  );
+
+  const handleSaveCorrection = useCallback(
+    (correction: MistakeCorrection) => {
+      const lang = correction.targetLanguage || activeScenario.language;
+      setVaultItems((prev) => {
+        const nextVault = mergeVocabItem(prev, {
+          word: correction.corrected,
+          translation: correction.intendedMeaning || `Correction for: ${correction.original}`,
+          exampleSentence: correction.additionalExample || undefined,
+          language: lang,
+          type: 'correction',
+          notes: correction.explanation,
+        });
+
+        setUserProgress((prog) => {
+          const mistakeKey = `${correction.original}::${correction.corrected}`;
+          const step1 = recordMistakeCorrected(prog, mistakeKey, nextVault.length);
+          const step2 = recordVocabLearned(step1.nextState, correction.corrected, nextVault.length);
+          return step2.nextState;
+        });
+
+        return nextVault;
+      });
+    },
+    [activeScenario.language]
+  );
 
   const handleToggleMastered = (id: string) => {
+    setVaultItems((prev) => {
+      const target = prev.find((item) => item.id === id);
+      const next = prev.map((item) =>
+        item.id === id ? { ...item, mastered: !item.mastered } : item
+      );
+      if (target && !target.mastered) {
+        setUserProgress((prog) => recordVocabLearned(prog, target.word, next.length).nextState);
+      }
+      return next;
+    });
+  };
+
+  const handleMarkPracticed = (id: string) => {
     setVaultItems((prev) =>
-      prev.map((item) => (item.id === id ? { ...item, mastered: !item.mastered } : item))
+      prev.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              practiceCount: (item.practiceCount || 0) + 1,
+              lastPracticedAt: Date.now(),
+            }
+          : item
+      )
     );
   };
 
@@ -247,13 +365,61 @@ export default function App() {
     setVaultItems((prev) => prev.filter((item) => item.id !== id));
   };
 
-  // End Live Voice Session handler
-  const handleEndLiveSession = (items: TranscriptItem[], completedObjectives: string[]) => {
-    setSummaryData({
+  // End Live Voice or Chat Session handler -> Opens AI Conversation Feedback Report
+  const handleEndSession = useCallback(
+    (payload: EndSessionPayload) => {
+      setSummaryState({
+        isOpen: true,
+        scenario: activeScenario,
+        sessionPayload: payload,
+        existingReport: null,
+      });
+    },
+    [activeScenario]
+  );
+
+  const handleReportReady = useCallback(
+    (report: ConversationReport) => {
+      setUserProgress((prev) => {
+        const { nextState, totalSessionXp } = recordCompletedSession(prev, {
+          sessionId: report.sessionId,
+          language: report.language,
+          level: report.level,
+          durationSeconds: report.durationSeconds,
+          userTurnCount: report.userTurnCount,
+          completedObjectivesCount: report.completedObjectives.length,
+          report,
+          vocabCount: vaultItems.length,
+        });
+
+        setSummaryState((cur) =>
+          cur && cur.sessionPayload?.sessionId === report.sessionId
+            ? {
+                ...cur,
+                existingReport: { ...report, xpEarned: totalSessionXp },
+              }
+            : cur
+        );
+
+        return nextState;
+      });
+    },
+    [vaultItems.length]
+  );
+
+  const handleViewSavedReport = (report: ConversationReport) => {
+    const matchedScenario =
+      [...customScenarios, ...PRESET_SCENARIOS].find((s) => s.title === report.scenarioTitle) || {
+        ...activeScenario,
+        title: report.scenarioTitle,
+        language: report.language,
+        level: report.level,
+      };
+    setSummaryState({
       isOpen: true,
-      scenario: activeScenario,
-      transcript: items,
-      completedObjectives,
+      scenario: matchedScenario,
+      sessionPayload: null,
+      existingReport: report,
     });
   };
 
@@ -267,6 +433,8 @@ export default function App() {
         onLanguageChange={setSelectedLanguage}
         activeScenarioTitle={activeScenario.title}
         vaultCount={vaultItems.length}
+        xp={userProgress.xp}
+        streakDays={userProgress.streakDays}
         onOpenAndroidModal={() => setShowAndroidModal(true)}
       />
 
@@ -277,6 +445,11 @@ export default function App() {
             onSelectScenario={handleSelectScenario}
             selectedLanguage={selectedLanguage}
             onLanguageChange={setSelectedLanguage}
+            customScenarios={customScenarios}
+            onSaveCustomScenario={handleSaveCustomScenario}
+            onDeleteCustomScenario={handleDeleteCustomScenario}
+            userProgress={userProgress}
+            onOpenDashboard={() => setCurrentTab('dashboard')}
           />
         )}
 
@@ -285,10 +458,12 @@ export default function App() {
             scenario={activeScenario}
             selectedVoice={selectedVoice}
             onVoiceChange={setSelectedVoice}
-            onEndSession={handleEndLiveSession}
+            onEndSession={handleEndSession}
             onInspectPhrase={(phrase) => setInspectPhrase(phrase)}
             onSaveToVault={handleAddToVault}
+            onSaveCorrection={handleSaveCorrection}
             onPlayTTS={handlePlayTTS}
+            onSwitchToChat={() => setCurrentTab('chat')}
           />
         )}
 
@@ -301,7 +476,9 @@ export default function App() {
             onPlayTTS={handlePlayTTS}
             onInspectPhrase={(phrase) => setInspectPhrase(phrase)}
             onSaveToVault={handleAddToVault}
+            onSaveCorrection={handleSaveCorrection}
             onSwitchToLiveVoice={() => setCurrentTab('live')}
+            onEndChatSession={handleEndSession}
             suggestedReplies={suggestedReplies}
           />
         )}
@@ -312,8 +489,19 @@ export default function App() {
             onToggleMastered={handleToggleMastered}
             onDeleteItem={handleDeleteVaultItem}
             onAddItem={handleAddToVault}
+            onMarkPracticed={handleMarkPracticed}
             onPlayTTS={handlePlayTTS}
             selectedLanguage={selectedLanguage}
+          />
+        )}
+
+        {currentTab === 'dashboard' && (
+          <LearningDashboard
+            progress={userProgress}
+            vocabItems={vaultItems}
+            onViewReport={handleViewSavedReport}
+            onStartScenarios={() => setCurrentTab('scenarios')}
+            onOpenVault={() => setCurrentTab('vault')}
           />
         )}
       </main>
@@ -330,20 +518,28 @@ export default function App() {
         />
       )}
 
-      {/* Session Summary Modal */}
-      {summaryData && (
+      {/* AI Conversation Feedback Report Modal */}
+      {summaryState && (
         <SessionSummaryModal
-          isOpen={summaryData.isOpen}
-          scenario={summaryData.scenario}
-          transcript={summaryData.transcript}
-          completedObjectives={summaryData.completedObjectives}
-          onClose={() => setSummaryData(null)}
+          isOpen={summaryState.isOpen}
+          scenario={summaryState.scenario}
+          sessionPayload={summaryState.sessionPayload}
+          existingReport={summaryState.existingReport}
+          onClose={() => setSummaryState(null)}
+          onReportReady={handleReportReady}
+          onSaveCorrection={handleSaveCorrection}
+          onSaveVocab={handleAddToVault}
+          onPlayTTS={handlePlayTTS}
           onOpenVault={() => {
-            setSummaryData(null);
+            setSummaryState(null);
             setCurrentTab('vault');
           }}
+          onOpenDashboard={() => {
+            setSummaryState(null);
+            setCurrentTab('dashboard');
+          }}
           onNewScenario={() => {
-            setSummaryData(null);
+            setSummaryState(null);
             setCurrentTab('scenarios');
           }}
         />

@@ -141,23 +141,37 @@ export class LiveAudioRecorder {
     return this.isRecording && !!this.mediaStream;
   }
 
-  public async start(onAudioChunk: (base64: string) => void): Promise<void> {
+  public async start(
+    onAudioChunk: (base64: string) => void,
+    existingStream?: MediaStream
+  ): Promise<void> {
     this.onAudioChunk = onAudioChunk;
 
     // Fast-path: if already actively capturing, reuse existing stream without duplicate permission prompt
     if (this.isRecording && this.mediaStream && this.processor) {
+      if (existingStream && existingStream !== this.mediaStream) {
+        existingStream.getTracks().forEach((track) => track.stop());
+      }
       return;
     }
 
+    if (!existingStream && (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia)) {
+      const unsupportedErr: any = new Error('Microphone capture is not supported in this browser context.');
+      unsupportedErr.name = 'NotSupportedError';
+      throw unsupportedErr;
+    }
+
     try {
-      this.mediaStream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      this.mediaStream =
+        existingStream ||
+        (await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        }));
 
       const AudioCtxClass = window.AudioContext || (window as any).webkitAudioContext;
       this.inputAudioCtx = new AudioCtxClass();
@@ -196,8 +210,23 @@ export class LiveAudioRecorder {
       this.processor.connect(this.inputAudioCtx.destination);
       this.isRecording = true;
     } catch (err: any) {
-      console.error('Error starting audio recorder:', err);
-      throw new Error(err?.message || 'Could not access microphone');
+      const name = String(err?.name || '');
+      const msg = String(err?.message || '');
+      const isExpectedPermissionOrDeviceIssue =
+        name === 'NotAllowedError' ||
+        name === 'PermissionDeniedError' ||
+        name === 'NotFoundError' ||
+        name === 'NotSupportedError' ||
+        msg.toLowerCase().includes('permission') ||
+        msg.toLowerCase().includes('denied');
+
+      if (!isExpectedPermissionOrDeviceIssue) {
+        console.warn('Unexpected audio recorder warning:', err);
+      }
+
+      const wrapped: any = new Error(msg || 'Could not access microphone');
+      wrapped.name = name || 'MicrophoneError';
+      throw wrapped;
     }
   }
 

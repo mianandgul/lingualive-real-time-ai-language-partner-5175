@@ -1,6 +1,16 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { TranscriptItem } from '../types';
-import { Volume2, Sparkles, Languages, Lightbulb, Bookmark } from 'lucide-react';
+import { MistakeCorrection, TranscriptItem } from '../types';
+import {
+  Volume2,
+  Sparkles,
+  Languages,
+  Lightbulb,
+  Bookmark,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Wand2,
+} from 'lucide-react';
 
 interface TranscriptViewProps {
   items: TranscriptItem[];
@@ -8,6 +18,7 @@ interface TranscriptViewProps {
   onPlayTTS: (text: string) => void;
   onInspect: (phrase: string) => void;
   onSavePhrase?: (text: string, translation?: string) => void;
+  onSaveCorrection?: (correction: MistakeCorrection) => void;
 }
 
 export const TranscriptView: React.FC<TranscriptViewProps> = ({
@@ -16,31 +27,38 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
   onPlayTTS,
   onInspect,
   onSavePhrase,
+  onSaveCorrection,
 }) => {
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const [showTranslations, setShowTranslations] = useState<boolean>(true);
   const [showPhonetics, setShowPhonetics] = useState<boolean>(true);
+  const [expandedCorrections, setExpandedCorrections] = useState<Record<string, boolean>>({});
+  const [savedCorrectionIds, setSavedCorrectionIds] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [items]);
 
+  const toggleCorrection = (itemId: string) => {
+    setExpandedCorrections((prev) => ({ ...prev, [itemId]: !prev[itemId] }));
+  };
+
   return (
     <div className="flex flex-col h-full bg-slate-900/60 border border-slate-800/80 rounded-2xl overflow-hidden backdrop-blur-md">
       {/* Transcript Toolbar */}
-      <div className="px-4 py-2.5 border-b border-slate-800/80 bg-slate-950/60 flex items-center justify-between">
-        <div className="flex items-center space-x-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span className="text-xs font-semibold text-slate-300">Live Transcript & Dialogue</span>
-          <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 font-medium">
-            {targetLanguage}
+      <div className="px-4 py-2.5 border-b border-slate-800/80 bg-slate-950/60 flex items-center justify-between gap-2">
+        <div className="flex items-center space-x-2 min-w-0">
+          <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+          <span className="text-xs font-semibold text-slate-300 truncate">Live Transcript & Dialogue</span>
+          <span className="text-[11px] text-indigo-300 font-medium shrink-0">
+            · {targetLanguage}
           </span>
         </div>
 
-        <div className="flex items-center space-x-2">
+        <div className="flex items-center space-x-2 shrink-0">
           <button
             onClick={() => setShowTranslations(!showTranslations)}
-            className={`flex items-center space-x-1 px-2.5 py-1 rounded-md text-xs font-medium transition ${
+            className={`flex items-center space-x-1 px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer ${
               showTranslations
                 ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/40'
                 : 'bg-slate-800 text-slate-400 hover:text-slate-200'
@@ -51,7 +69,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
           </button>
           <button
             onClick={() => setShowPhonetics(!showPhonetics)}
-            className={`flex items-center space-x-1 px-2.5 py-1 rounded-md text-xs font-medium transition ${
+            className={`flex items-center space-x-1 px-2.5 py-1 rounded-md text-xs font-medium transition cursor-pointer ${
               showPhonetics
                 ? 'bg-cyan-600/30 text-cyan-300 border border-cyan-500/40'
                 : 'bg-slate-800 text-slate-400 hover:text-slate-200'
@@ -77,6 +95,9 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
         ) : (
           items.map((item) => {
             const isUser = item.role === 'user';
+            const isExpanded = Boolean(expandedCorrections[item.id]);
+            const corr = item.correction;
+
             return (
               <div
                 key={item.id}
@@ -88,7 +109,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                   <span className="font-semibold text-slate-300">
                     {isUser ? 'You' : 'AI Partner (Live)'}
                   </span>
-                  <span className="text-[10px] text-slate-500">
+                  <span className="text-[10px] text-slate-500 tabular-nums">
                     {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                   </span>
                 </div>
@@ -126,11 +147,11 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                   )}
 
                   {/* Interactive Action Buttons */}
-                  <div className="flex items-center gap-1.5 mt-2.5 pt-2 border-t border-slate-700/40 text-xs">
+                  <div className="flex flex-wrap items-center gap-1.5 mt-2.5 pt-2 border-t border-slate-700/40 text-xs">
                     <button
                       onClick={() => onPlayTTS(item.text)}
                       title="Listen to native audio"
-                      className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-900/60 hover:bg-indigo-600 text-slate-300 hover:text-white transition text-[11px]"
+                      className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-900/60 hover:bg-indigo-600 text-slate-300 hover:text-white transition text-[11px] cursor-pointer"
                     >
                       <Volume2 className="w-3.5 h-3.5" />
                       <span>Listen</span>
@@ -139,7 +160,7 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                     <button
                       onClick={() => onInspect(item.text)}
                       title="Inspect grammar, tokens & meaning"
-                      className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-900/60 hover:bg-cyan-600 text-slate-300 hover:text-white transition text-[11px]"
+                      className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-900/60 hover:bg-cyan-600 text-slate-300 hover:text-white transition text-[11px] cursor-pointer"
                     >
                       <Sparkles className="w-3.5 h-3.5" />
                       <span>Inspect</span>
@@ -148,15 +169,81 @@ export const TranscriptView: React.FC<TranscriptViewProps> = ({
                     {onSavePhrase && (
                       <button
                         onClick={() => onSavePhrase(item.text, item.translation)}
-                        title="Save to flashcards"
-                        className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-900/60 hover:bg-emerald-600 text-slate-300 hover:text-white transition text-[11px]"
+                        title="Save to vocabulary memory"
+                        className="flex items-center space-x-1 px-2 py-1 rounded bg-slate-900/60 hover:bg-emerald-600 text-slate-300 hover:text-white transition text-[11px] cursor-pointer"
                       >
                         <Bookmark className="w-3.5 h-3.5" />
                         <span>Save</span>
                       </button>
                     )}
+
+                    {corr && (
+                      <button
+                        onClick={() => toggleCorrection(item.id)}
+                        className="flex items-center space-x-1 px-2 py-1 rounded bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 border border-amber-500/30 transition text-[11px] cursor-pointer ml-auto"
+                      >
+                        <Wand2 className="w-3 h-3" />
+                        <span>Suggestion</span>
+                        {isExpanded ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+                      </button>
+                    )}
                   </div>
                 </div>
+
+                {/* Expandable Smart Mistake Correction (non-intrusive during live speech) */}
+                {corr && isExpanded && (
+                  <div className="max-w-[88%] sm:max-w-[78%] p-3.5 rounded-xl bg-slate-900/95 border border-amber-700/50 text-xs space-y-2 shadow-lg animate-fadeIn">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-amber-300">
+                        {corr.errorType} Tip · Natural Suggestion
+                      </span>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          onClick={() => onPlayTTS(corr.corrected)}
+                          className="p-1 rounded bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white transition cursor-pointer"
+                          title="Listen to corrected sentence"
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                        </button>
+                        {onSaveCorrection && (
+                          <button
+                            onClick={() => {
+                              onSaveCorrection({ ...corr, targetLanguage });
+                              setSavedCorrectionIds((prev) => ({ ...prev, [corr.id]: true }));
+                            }}
+                            disabled={savedCorrectionIds[corr.id]}
+                            className="flex items-center space-x-1 px-2 py-1 rounded bg-emerald-600/80 hover:bg-emerald-500 disabled:bg-emerald-700 text-white font-semibold text-[11px] transition cursor-pointer"
+                          >
+                            {savedCorrectionIds[corr.id] ? (
+                              <>
+                                <Check className="w-3 h-3" />
+                                <span>Saved</span>
+                              </>
+                            ) : (
+                              <>
+                                <Bookmark className="w-3 h-3" />
+                                <span>Save Fix</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="space-y-1">
+                      <p className="text-emerald-300 font-semibold">{corr.corrected}</p>
+                      {corr.intendedMeaning && (
+                        <p className="text-slate-400 italic">Intended: "{corr.intendedMeaning}"</p>
+                      )}
+                      <p className="text-slate-300 leading-relaxed">{corr.explanation}</p>
+                      {corr.additionalExample && (
+                        <p className="text-indigo-300/90 pt-1 border-t border-slate-800">
+                          Example: "{corr.additionalExample}"
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                )}
 
                 {/* Grammar Feedback Callout */}
                 {item.grammarFeedback && (

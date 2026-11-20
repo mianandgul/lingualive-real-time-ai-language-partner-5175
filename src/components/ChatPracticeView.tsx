@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
-import { Scenario, TranscriptItem, VocabularyItem } from '../types';
+import React, { useState, useRef } from 'react';
+import { MistakeCorrection, Scenario, TranscriptItem, VocabularyItem } from '../types';
 import { TranscriptView } from './TranscriptView';
-import { Send, Sparkles } from 'lucide-react';
+import { Send, Sparkles, FileBarChart2 } from 'lucide-react';
+import { EndSessionPayload } from './LiveVoiceRoom';
 
 interface ChatPracticeViewProps {
   scenario: Scenario;
@@ -11,7 +12,9 @@ interface ChatPracticeViewProps {
   onPlayTTS: (text: string) => void;
   onInspectPhrase: (phrase: string) => void;
   onSaveToVault: (item: Omit<VocabularyItem, 'id' | 'learnedAt' | 'mastered'>) => void;
+  onSaveCorrection: (correction: MistakeCorrection) => void;
   onSwitchToLiveVoice: () => void;
+  onEndChatSession: (payload: EndSessionPayload) => void;
   suggestedReplies?: { text: string; translation: string }[];
 }
 
@@ -23,10 +26,14 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
   onPlayTTS,
   onInspectPhrase,
   onSaveToVault,
+  onSaveCorrection,
   onSwitchToLiveVoice,
+  onEndChatSession,
   suggestedReplies = [],
 }) => {
   const [inputText, setInputText] = useState('');
+  const sessionStartRef = useRef<number>(Date.now());
+  const sessionIdRef = useRef<string>(`chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -41,6 +48,22 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
     await onSendMessage(phrase);
   };
 
+  const handleCompleteChatReport = () => {
+    const durationSeconds = Math.max(1, Math.round((Date.now() - sessionStartRef.current) / 1000));
+    onEndChatSession({
+      sessionId: sessionIdRef.current,
+      items: transcript,
+      completedObjectives: [],
+      durationSeconds,
+      hasVoiceEvidence: false,
+      voicedSeconds: 0,
+    });
+    sessionIdRef.current = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    sessionStartRef.current = Date.now();
+  };
+
+  const hasUserTurns = transcript.some((t) => t.role === 'user');
+
   return (
     <div className="flex flex-col h-[calc(100vh-4rem)] max-w-6xl mx-auto p-3 sm:p-5 gap-4">
       {/* Top Banner */}
@@ -52,8 +75,8 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
           <div>
             <div className="flex items-center space-x-2">
               <h2 className="font-bold text-white text-base">{scenario.title}</h2>
-              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-600/30 text-indigo-300 uppercase">
-                {scenario.level}
+              <span className="text-xs font-semibold text-indigo-300">
+                · {scenario.language} · {scenario.level}
               </span>
             </div>
             <p className="text-xs text-slate-400">
@@ -62,13 +85,24 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
           </div>
         </div>
 
-        <button
-          onClick={onSwitchToLiveVoice}
-          className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-purple-950/40 transition"
-        >
-          <Sparkles className="w-4 h-4" />
-          <span>Switch to Live Voice Call</span>
-        </button>
+        <div className="flex items-center gap-2">
+          {hasUserTurns && (
+            <button
+              onClick={handleCompleteChatReport}
+              className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-200 font-semibold text-xs transition cursor-pointer"
+            >
+              <FileBarChart2 className="w-4 h-4 text-emerald-400" />
+              <span>Finish & Report</span>
+            </button>
+          )}
+          <button
+            onClick={onSwitchToLiveVoice}
+            className="flex items-center space-x-2 px-4 py-2 rounded-xl bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-bold text-xs shadow-lg shadow-purple-950/40 transition cursor-pointer"
+          >
+            <Sparkles className="w-4 h-4" />
+            <span>Switch to Live Voice Call</span>
+          </button>
+        </div>
       </div>
 
       {/* Main Transcript Body */}
@@ -78,6 +112,7 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
           targetLanguage={scenario.language}
           onPlayTTS={onPlayTTS}
           onInspect={onInspectPhrase}
+          onSaveCorrection={onSaveCorrection}
           onSavePhrase={(text, translation) =>
             onSaveToVault({
               word: text,
@@ -85,12 +120,13 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
               exampleSentence: text,
               exampleTranslation: translation,
               language: scenario.language,
+              type: text.trim().split(/\s+/).length > 2 ? 'phrase' : 'word',
             })
           }
         />
       </div>
 
-      {/* Suggested Next Turns / Helper Pills */}
+      {/* Suggested Next Turns / Helper Buttons */}
       {suggestedReplies.length > 0 && (
         <div className="flex items-center gap-2 overflow-x-auto pb-1 text-xs">
           <span className="text-slate-500 text-[11px] shrink-0 font-medium">Suggestions:</span>
@@ -98,7 +134,7 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
             <button
               key={idx}
               onClick={() => handleSelectSuggestion(sug.text)}
-              className="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-indigo-600/40 border border-slate-700/60 text-slate-200 hover:text-white transition shrink-0 text-left"
+              className="px-3 py-1.5 rounded-xl bg-slate-800/80 hover:bg-indigo-600/40 border border-slate-700/60 text-slate-200 hover:text-white transition shrink-0 text-left cursor-pointer"
             >
               <span className="font-semibold">{sug.text}</span>
               <span className="text-[10px] text-slate-400 ml-1.5 italic">({sug.translation})</span>
@@ -123,7 +159,7 @@ export const ChatPracticeView: React.FC<ChatPracticeViewProps> = ({
         <button
           type="submit"
           disabled={!inputText.trim() || isSending}
-          className="p-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition disabled:opacity-40 disabled:hover:bg-indigo-600 shadow-md"
+          className="p-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold transition disabled:opacity-40 disabled:hover:bg-indigo-600 shadow-md cursor-pointer"
         >
           {isSending ? (
             <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />

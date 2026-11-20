@@ -30,6 +30,9 @@ export interface Scenario {
   icon: string;
   partnerRole: string;
   userRole: string;
+  aiPersonality?: string;
+  isCustom?: boolean;
+  createdAt?: number;
   register?: PolitenessRegister;
   culturalEtiquetteNote?: string;
   starterPrompt: string;
@@ -38,6 +41,17 @@ export interface Scenario {
   starterPhonetics?: string;
   objectives: ScenarioObjective[];
   usefulPhrases: { text: string; translation: string; register?: string }[];
+}
+
+export interface MistakeCorrection {
+  id: string;
+  original: string;
+  intendedMeaning: string;
+  corrected: string;
+  errorType: 'Grammar' | 'Vocabulary' | 'Structure' | 'Register';
+  explanation: string;
+  additionalExample: string;
+  targetLanguage?: string;
 }
 
 export interface TranscriptItem {
@@ -50,6 +64,7 @@ export interface TranscriptItem {
   grammarFeedback?: string | null;
   registerFeedback?: string | null;
   pronunciationTip?: string | null;
+  correction?: MistakeCorrection | null;
   audioUrl?: string;
   timestamp: number;
   isStreaming?: boolean;
@@ -85,8 +100,12 @@ export interface VocabularyItem {
   exampleTranslation?: string;
   language: string;
   cefr?: CEFRLevel;
+  type?: 'word' | 'phrase' | 'correction';
+  notes?: string;
   learnedAt: number;
   mastered: boolean;
+  practiceCount?: number;
+  lastPracticedAt?: number;
 }
 
 export type LiveVoiceName = 'Zephyr' | 'Puck' | 'Charon' | 'Kore' | 'Fenrir';
@@ -100,4 +119,109 @@ export interface CEFRAssessment {
   keyStrengths: string[];
   areasForImprovement: string[];
   recommendedDrills: string[];
+}
+
+export interface BetterAlternative {
+  original: string;
+  improved: string;
+  contextNote: string;
+}
+
+export interface PracticeWordSuggestion {
+  word: string;
+  translation: string;
+  phonetics?: string;
+  reason: string;
+  exampleSentence: string;
+}
+
+export interface ConversationReport {
+  id: string;
+  sessionId: string;
+  createdAt: number;
+  scenarioTitle: string;
+  language: string;
+  level: LearnerLevel;
+  durationSeconds: number;
+  userTurnCount: number;
+  completedObjectives: string[];
+  totalObjectives: number;
+  insufficientData: boolean;
+  overallScore: number | null;
+  grammarAccuracy: number | null;
+  pronunciationAvailable: boolean;
+  pronunciationScore: number | null;
+  pronunciationNote: string;
+  vocabularyUsage: number | null;
+  speakingFluency: number | null;
+  sentenceStructure: number | null;
+  cefrEstimate: CEFRLevel;
+  mistakes: MistakeCorrection[];
+  betterAlternatives: BetterAlternative[];
+  wordsToPractice: PracticeWordSuggestion[];
+  strengths: string[];
+  summaryFeedback: string;
+  xpEarned: number;
+}
+
+export interface DailyMissionDefinition {
+  id: string;
+  title: string;
+  description: string;
+  xpReward: number;
+  target: number;
+  unit: string;
+  metric: 'longestSessionSecondsToday' | 'wordsLearnedToday' | 'beginnerScenariosToday' | 'speakingSecondsToday' | 'mistakesCorrectedToday';
+}
+
+export interface DailyMissionStatus extends DailyMissionDefinition {
+  progress: number;
+  completed: boolean;
+  xpAwarded: boolean;
+}
+
+export interface CompletedMissionRecord {
+  id: string;
+  missionId: string;
+  title: string;
+  xpAwarded: number;
+  completedAt: number;
+  date: string;
+}
+
+export interface AchievementBadge {
+  id: string;
+  title: string;
+  description: string;
+  icon: string;
+  unlockedAt?: number;
+}
+
+export interface DailyActivityState {
+  date: string;
+  speakingSecondsToday: number;
+  longestSessionSecondsToday: number;
+  sessionsToday: number;
+  wordsLearnedToday: number;
+  learnedWordsListToday: string[];
+  beginnerScenariosToday: number;
+  mistakesCorrectedToday: number;
+  correctedMistakeKeysToday: string[];
+  claimedMissionIds: string[];
+}
+
+export interface UserProgressState {
+  xp: number;
+  streakDays: number;
+  lastActiveDate: string | null;
+  totalSpeakingSeconds: number;
+  sessionsCompleted: number;
+  beginnerScenariosCompleted: number;
+  mistakesCorrectedCount: number;
+  languagesPracticed: string[];
+  claimedSessionIds: string[];
+  dailyState: DailyActivityState;
+  completedMissionHistory: CompletedMissionRecord[];
+  unlockedBadgeIds: Record<string, number>;
+  recentReports: ConversationReport[];
 }

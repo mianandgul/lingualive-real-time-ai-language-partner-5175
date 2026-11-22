@@ -29,7 +29,9 @@ import {
   Radio,
   MessageSquare,
   Clock,
+  ShieldCheck,
 } from 'lucide-react';
+import { useI18n } from '../services/i18n';
 
 export interface EndSessionPayload {
   sessionId: string;
@@ -44,18 +46,20 @@ interface LiveVoiceRoomProps {
   scenario: Scenario;
   selectedVoice: LiveVoiceName;
   onVoiceChange: (voice: LiveVoiceName) => void;
+  onVoiceCallStarted?: (sessionId: string) => void;
   onEndSession: (payload: EndSessionPayload) => void;
   onInspectPhrase: (phrase: string) => void;
   onSaveToVault: (item: Omit<VocabularyItem, 'id' | 'learnedAt' | 'mastered'>) => void;
   onSaveCorrection: (correction: MistakeCorrection) => void;
   onPlayTTS: (text: string) => void;
-  onSwitchToChat: () => void;
+  onSwitchToChat: (reason?: string) => void;
 }
 
 export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
   scenario,
   selectedVoice,
   onVoiceChange,
+  onVoiceCallStarted,
   onEndSession,
   onInspectPhrase,
   onSaveToVault,
@@ -63,6 +67,7 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
   onPlayTTS,
   onSwitchToChat,
 }) => {
+  const { t, nativeLanguageName } = useI18n();
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [isConnecting, setIsConnecting] = useState<boolean>(true);
   const [isMuted, setIsMuted] = useState<boolean>(false);
@@ -79,6 +84,10 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
   // Transcript items
   const [transcript, setTranscript] = useState<TranscriptItem[]>([]);
   const currentModelTurnRef = useRef<string>('');
+  const currentUserTurnIdRef = useRef<string | null>(null);
+  const currentUserTurnTextRef = useRef<string>('');
+  const userTurnCheckTimerRef = useRef<number | null>(null);
+  const checkedUserTurnsRef = useRef<Record<string, string>>({});
   const transcriptRef = useRef<TranscriptItem[]>([]);
   useEffect(() => {
     transcriptRef.current = transcript;
@@ -86,6 +95,10 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
 
   // Objectives tracking
   const [objectives, setObjectives] = useState(scenario.objectives);
+  const objectivesRef = useRef(scenario.objectives);
+  useEffect(() => {
+    objectivesRef.current = objectives;
+  }, [objectives]);
 
   // Fallback text input
   const [textInput, setTextInput] = useState<string>('');
@@ -98,6 +111,9 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
   const meterIntervalRef = useRef<number | null>(null);
   const timerIntervalRef = useRef<number | null>(null);
   const connectionTimeoutRef = useRef<number | null>(null);
+  const autoFallbackTimerRef = useRef<number | null>(null);
+  const greetingSentRef = useRef<boolean>(false);
+  const isMountedRef = useRef<boolean>(true);
   const isConnectingRef = useRef<boolean>(false);
   const isMutedRef = useRef<boolean>(isMuted);
   const isConnectedRef = useRef<boolean>(false);
@@ -118,10 +134,12 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
 
   // Instantiate audio utilities once on mount
   useEffect(() => {
+    isMountedRef.current = true;
     if (!playerRef.current) playerRef.current = new LiveAudioPlayer();
     if (!recorderRef.current) recorderRef.current = new LiveAudioRecorder();
 
     return () => {
+      isMountedRef.current = false;
       cleanupAll();
     };
   }, []);
@@ -131,6 +149,10 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
     sessionIdRef.current = `voice-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     voicedDurationMsRef.current = 0;
     hasVoiceTurnRef.current = false;
+    currentModelTurnRef.current = '';
+    currentUserTurnIdRef.current = null;
+    currentUserTurnTextRef.current = '';
+    checkedUserTurnsRef.current = {};
     setElapsedSeconds(0);
 
     if (scenario.starterGreeting) {
@@ -171,9 +193,17 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
   }, [isConnected]);
 
   const cleanupAll = useCallback(() => {
+    if (userTurnCheckTimerRef.current) {
+      window.clearTimeout(userTurnCheckTimerRef.current);
+      userTurnCheckTimerRef.current = null;
+    }
     if (connectionTimeoutRef.current) {
       window.clearTimeout(connectionTimeoutRef.current);
       connectionTimeoutRef.current = null;
+    }
+    if (autoFallbackTimerRef.current) {
+      window.clearTimeout(autoFallbackTimerRef.current);
+      autoFallbackTimerRef.current = null;
     }
     if (meterIntervalRef.current) {
       window.clearInterval(meterIntervalRef.current);
@@ -190,31 +220,36 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
       playerRef.current.close();
     }
     if (liveSessionRef.current) {
+      const activeLive = liveSessionRef.current;
+      liveSessionRef.current = null;
       try {
-        liveSessionRef.current.close();
+        activeLive.close();
       } catch {
         // Ignore
       }
-      liveSessionRef.current = null;
     }
     if (wsRef.current) {
+      const activeWs = wsRef.current;
+      wsRef.current = null;
       try {
-        wsRef.current.close();
+        activeWs.close();
       } catch {
         // Ignore
       }
-      wsRef.current = null;
     }
     sessionReadyRef.current = false;
     isMicReadyRef.current = false;
     isConnectingRef.current = false;
+    greetingSentRef.current = false;
   }, []);
 
-  // Quiet background smart mistake detection (never interrupts live audio)
+  // Quiet background smart mistake + multilingual objective detection (never interrupts live audio)
   const checkUtteranceMistakesQuietly = useCallback(
     async (turnId: string, text: string) => {
       const trimmed = text.trim();
-      if (trimmed.split(/\s+/).length < 3) return;
+      if (trimmed.split(/\s+/).length < 2) return;
+      if (checkedUserTurnsRef.current[turnId] === trimmed) return;
+      checkedUserTurnsRef.current[turnId] = trimmed;
 
       try {
         const res = await fetch('/api/check-mistakes', {
@@ -223,8 +258,10 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
           body: JSON.stringify({
             utterance: trimmed,
             targetLanguage: scenario.language,
+            nativeLanguage: nativeLanguageName,
             learnerLevel: scenario.level,
             context: scenario.title,
+            objectives: objectivesRef.current,
           }),
         });
         if (!res.ok) return;
@@ -244,30 +281,102 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
             )
           );
         }
+        if (Array.isArray(data?.completedObjectives) && data.completedObjectives.length > 0) {
+          const completedLower = data.completedObjectives.map((t: string) => t.toLowerCase());
+          setObjectives((prev) =>
+            prev.map((obj) =>
+              obj.completed || completedLower.includes(obj.title.toLowerCase())
+                ? { ...obj, completed: true }
+                : obj
+            )
+          );
+        }
       } catch {
         // Silent non-blocking check
       }
     },
-    [scenario.language, scenario.level, scenario.title]
+    [scenario.language, scenario.level, scenario.title, nativeLanguageName]
+  );
+
+  const scheduleAutoFallbackToChat = useCallback(
+    (reason: string) => {
+      if (autoFallbackTimerRef.current) {
+        window.clearTimeout(autoFallbackTimerRef.current);
+      }
+      autoFallbackTimerRef.current = window.setTimeout(() => {
+        autoFallbackTimerRef.current = null;
+        if (isMountedRef.current && !sessionReadyRef.current) {
+          cleanupAll();
+          onSwitchToChat(reason);
+        }
+      }, 1100);
+    },
+    [cleanupAll, onSwitchToChat]
+  );
+
+  const sendOpeningGreetingIfReady = useCallback(
+    (sessionObj?: any, socketObj?: WebSocket) => {
+      if (greetingSentRef.current) return;
+      greetingSentRef.current = true;
+      const kickoffPrompt = `[System: The learner just connected to the "${scenario.title}" voice call. Greet the learner immediately with one warm, natural opening line in ${scenario.language} in character as ${scenario.partnerRole} (${scenario.level} level).]`;
+
+      try {
+        if (sessionObj) {
+          sessionObj.sendRealtimeInput({ text: kickoffPrompt });
+        } else if (socketObj && socketObj.readyState === WebSocket.OPEN) {
+          socketObj.send(JSON.stringify({ type: 'text', text: kickoffPrompt }));
+        }
+      } catch {
+        // Ignore if session not ready for kickoff
+      }
+    },
+    [scenario.language, scenario.level, scenario.partnerRole, scenario.title]
   );
 
   // Helper to establish direct client-side Gemini Live connection via ephemeral token
   const connectDirectLiveAPI = useCallback(async () => {
     let activeToken = '';
+    let tokenErrorMessage = '';
+    let isMissingKey = false;
 
-    try {
-      const res = await fetch('/api/live-token', {
+    const requestTokenFromEndpoint = async (endpoint: string) => {
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
       });
-      if (res.ok) {
-        const data = await res.json();
-        if (data.token) {
-          activeToken = data.token;
-        }
+      const data = await res.json().catch(() => ({}));
+      return { res, data };
+    };
+
+    try {
+      let { res, data } = await requestTokenFromEndpoint('/api/token');
+      if (res.status === 404) {
+        ({ res, data } = await requestTokenFromEndpoint('/api/live-token'));
       }
-    } catch (e) {
-      console.warn('Could not fetch ephemeral token from /api/live-token:', e);
+
+      if (res.ok && data?.token) {
+        activeToken = data.token;
+      } else {
+        const rawErr = String(data?.error || data?.details || '');
+        const lowerErr = rawErr.toLowerCase();
+        isMissingKey =
+          data?.errorCode === 'MISSING_API_KEY' ||
+          res.status === 503 ||
+          lowerErr.includes('api key') ||
+          lowerErr.includes('api_key') ||
+          lowerErr.includes('not configured') ||
+          lowerErr.includes('unauthorized') ||
+          lowerErr.includes('401') ||
+          lowerErr.includes('403');
+
+        tokenErrorMessage = isMissingKey
+          ? 'Voice service not configured. Please check API Key in Vercel Settings'
+          : rawErr || 'Could not establish a live voice token from the server.';
+      }
+    } catch (e: any) {
+      console.warn('Could not fetch ephemeral token from /api/token:', e);
+      tokenErrorMessage =
+        e?.message || 'Unable to reach live voice token endpoint.';
     }
 
     if (!activeToken) {
@@ -275,12 +384,14 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
         window.clearTimeout(connectionTimeoutRef.current);
         connectionTimeoutRef.current = null;
       }
+      const displayMessage = isMissingKey
+        ? 'Voice service not configured. Please check API Key in Vercel Settings'
+        : `${tokenErrorMessage} Switched automatically to Text Chat so you can continue practicing.`;
       setIsConnecting(false);
       setIsConnected(false);
       isConnectingRef.current = false;
-      setConnectionError(
-        'Could not establish a live voice token from the server. Please verify your network or switch to Text + Audio Chat.'
-      );
+      setConnectionError(displayMessage);
+      scheduleAutoFallbackToChat(displayMessage);
       return;
     }
 
@@ -292,6 +403,7 @@ export const LiveVoiceRoom: React.FC<LiveVoiceRoomProps> = ({
 
       const systemInstruction = `You are an authentic, engaging native language speaking partner for real-time conversation practice.
 Target Language: ${scenario.language}
+Learner Native Language: ${nativeLanguageName}
 Learner Level: ${scenario.level}
 Roleplay Scenario: ${scenario.title} (${scenario.partnerRole})
 ${scenario.aiPersonality ? `AI Character Personality: ${scenario.aiPersonality}` : ''}
@@ -301,10 +413,12 @@ Scenario Context: ${scenario.description}. Starter context: ${scenario.starterGr
 Key guidelines for voice conversation:
 1. Speak in ${scenario.language}. Speak clearly and at an appropriate pace for ${scenario.level} level.
 2. Keep turns short and conversational (1-2 sentences at a time) so the learner has ample space to speak and practice.
-3. If the learner hesitates, stumbles, or uses English, be warm and patient. Encourage them and prompt them with easy vocabulary.
+3. If the learner hesitates, stumbles, or uses ${nativeLanguageName}, be warm and patient. Encourage them and prompt them with easy vocabulary.
 4. Do not interrupt or lecture the learner on every grammar mistake; if they make minor errors, rephrase naturally in your response so conversation flows naturally.
 5. Embody your character, personality, and situation authentically and make it engaging.`;
 
+      let sessionRefLocal: any = null;
+      let setupReadyTimeout: number | null = null;
       const session = await ai.live.connect({
         model: 'gemini-3.8-live',
         config: {
@@ -324,41 +438,75 @@ Key guidelines for voice conversation:
               window.clearTimeout(connectionTimeoutRef.current);
               connectionTimeoutRef.current = null;
             }
+            if (autoFallbackTimerRef.current) {
+              window.clearTimeout(autoFallbackTimerRef.current);
+              autoFallbackTimerRef.current = null;
+            }
             sessionReadyRef.current = true;
             setIsConnected(true);
             setConnectionError(null);
+            onVoiceCallStarted?.(sessionIdRef.current);
             if (isMicSettledRef.current) {
               setIsConnecting(false);
               isConnectingRef.current = false;
             }
+            setupReadyTimeout = window.setTimeout(() => {
+              if (sessionRefLocal) {
+                sendOpeningGreetingIfReady(sessionRefLocal);
+              }
+            }, 600);
           },
           onmessage: (serverMsg: any) => {
+            if (serverMsg.setupComplete) {
+              if (setupReadyTimeout) {
+                window.clearTimeout(setupReadyTimeout);
+                setupReadyTimeout = null;
+              }
+              if (sessionRefLocal || liveSessionRef.current) {
+                sendOpeningGreetingIfReady(sessionRefLocal || liveSessionRef.current);
+              }
+            }
             const parts = serverMsg.serverContent?.modelTurn?.parts;
             if (parts && parts.length > 0) {
+              finalizeActiveUserTurn();
               for (const part of parts) {
                 if (part.inlineData?.data && playerRef.current) {
                   playerRef.current.playChunk(part.inlineData.data);
                   setIsModelSpeaking(true);
                 }
                 if (part.text) {
-                  currentModelTurnRef.current += part.text;
+                  currentModelTurnRef.current = mergeTranscriptChunk(
+                    currentModelTurnRef.current,
+                    part.text
+                  );
                   updateStreamingModelTurn(currentModelTurnRef.current);
                 }
               }
             }
-            if (serverMsg.serverContent?.inputAudioTranscription?.text) {
+            const inputTranscriptText =
+              serverMsg.serverContent?.inputTranscription?.text ||
+              serverMsg.serverContent?.inputAudioTranscription?.text;
+            if (inputTranscriptText) {
               hasVoiceTurnRef.current = true;
-              appendUserTurn(serverMsg.serverContent.inputAudioTranscription.text, true);
+              appendStreamingUserChunk(inputTranscriptText);
             }
-            if (serverMsg.serverContent?.outputAudioTranscription?.text) {
-              currentModelTurnRef.current = serverMsg.serverContent.outputAudioTranscription.text;
-              finalizeModelTurn(serverMsg.serverContent.outputAudioTranscription.text);
+            const outputTranscriptText =
+              serverMsg.serverContent?.outputTranscription?.text ||
+              serverMsg.serverContent?.outputAudioTranscription?.text;
+            if (outputTranscriptText) {
+              finalizeActiveUserTurn();
+              currentModelTurnRef.current = mergeTranscriptChunk(
+                currentModelTurnRef.current,
+                outputTranscriptText
+              );
+              updateStreamingModelTurn(currentModelTurnRef.current);
             }
             if (serverMsg.serverContent?.interrupted) {
               if (playerRef.current) playerRef.current.interrupt();
               setIsModelSpeaking(false);
             }
             if (serverMsg.serverContent?.turnComplete) {
+              finalizeActiveUserTurn();
               setIsModelSpeaking(false);
               if (currentModelTurnRef.current) {
                 finalizeModelTurn(currentModelTurnRef.current);
@@ -372,10 +520,23 @@ Key guidelines for voice conversation:
               window.clearTimeout(connectionTimeoutRef.current);
               connectionTimeoutRef.current = null;
             }
-            setConnectionError('Live voice connection interrupted: ' + (err?.message || 'Please retry.'));
+            const errMsg = String(err?.message || '');
+            const lowerErr = errMsg.toLowerCase();
+            const isKeyErr =
+              lowerErr.includes('api key') ||
+              lowerErr.includes('api_key') ||
+              lowerErr.includes('unauthorized') ||
+              lowerErr.includes('401') ||
+              lowerErr.includes('403');
+            const friendlyErr = isKeyErr
+              ? 'Voice service not configured. Please check API Key in Vercel Settings'
+              : `Live voice connection interrupted: ${errMsg || 'Switched to Text Chat mode.'}`;
+            setConnectionError(friendlyErr);
             setIsConnecting(false);
             setIsConnected(false);
+            sessionReadyRef.current = false;
             isConnectingRef.current = false;
+            scheduleAutoFallbackToChat(friendlyErr);
           },
           onclose: () => {
             setIsConnected(false);
@@ -384,22 +545,35 @@ Key guidelines for voice conversation:
         },
       });
 
+      sessionRefLocal = session;
       liveSessionRef.current = session;
+      if (sessionReadyRef.current) {
+        sendOpeningGreetingIfReady(session);
+      }
     } catch (directErr: any) {
       console.error('Failed to establish direct Live connection:', directErr);
       if (connectionTimeoutRef.current) {
         window.clearTimeout(connectionTimeoutRef.current);
         connectionTimeoutRef.current = null;
       }
-      setConnectionError(
-        directErr?.message ||
-          'Connection to Live voice server failed. You can retry or switch to Chat Practice.'
-      );
+      const errMsg = String(directErr?.message || '');
+      const lowerErr = errMsg.toLowerCase();
+      const isKeyErr =
+        lowerErr.includes('api key') ||
+        lowerErr.includes('api_key') ||
+        lowerErr.includes('unauthorized') ||
+        lowerErr.includes('401') ||
+        lowerErr.includes('403');
+      const friendlyErr = isKeyErr
+        ? 'Voice service not configured. Please check API Key in Vercel Settings'
+        : errMsg || 'Connection to Live voice server failed. Switched automatically to Text Chat.';
+      setConnectionError(friendlyErr);
       setIsConnecting(false);
       setIsConnected(false);
       isConnectingRef.current = false;
+      scheduleAutoFallbackToChat(friendlyErr);
     }
-  }, [scenario, selectedVoice]);
+  }, [scenario, selectedVoice, scheduleAutoFallbackToChat, sendOpeningGreetingIfReady]);
 
   const requestMicrophoneCapture = useCallback(async (forcePrompt: boolean = false) => {
     if (!recorderRef.current) recorderRef.current = new LiveAudioRecorder();
@@ -419,14 +593,40 @@ Key guidelines for voice conversation:
         try {
           const perm = await navigator.permissions.query({ name: 'microphone' as PermissionName });
           if (perm.state === 'denied') {
-            const deniedErr: any = new Error('Permission denied');
-            deniedErr.name = 'NotAllowedError';
-            throw deniedErr;
+            isMicReadyRef.current = false;
+            isMicSettledRef.current = true;
+            setIsMicReady(false);
+            setMicError({
+              code: 'NotAllowedError',
+              title: 'Microphone Permission Blocked (NotAllowedError)',
+              detail:
+                'Microphone access was denied or blocked in site settings. Update your browser/OS permission to Allow, then click "Reset Permission" or "Retry".',
+              browserSteps:
+                'Site Settings: Click the lock / tune icon in your browser address bar → Permissions → set Microphone to Allow (or Reset permission).',
+              osSteps:
+                'OS Settings: Windows (Privacy & Security → Microphone), macOS (System Settings → Privacy & Security → Microphone), or Android/iOS (App Settings → Browser → Microphone) → Allow.',
+              permissionStatus: perm.state,
+            });
+            if (sessionReadyRef.current) {
+              setIsConnecting(false);
+              isConnectingRef.current = false;
+            }
+            return;
           }
-        } catch (permErr: any) {
-          if (permErr?.name === 'NotAllowedError') {
-            throw permErr;
+          const isEmbedded = typeof window !== 'undefined' && window.self !== window.top;
+          if (perm.state === 'prompt' && isEmbedded) {
+            // In embedded frames without user gesture, defer getUserMedia to explicit mic button click
+            isMicReadyRef.current = false;
+            isMicSettledRef.current = true;
+            setIsMicReady(false);
+            if (sessionReadyRef.current) {
+              setIsConnecting(false);
+              isConnectingRef.current = false;
+            }
+            return;
           }
+        } catch {
+          // Proceed normally if Permissions API does not support 'microphone'
         }
       }
 
@@ -619,41 +819,49 @@ Key guidelines for voice conversation:
     sessionReadyRef.current = false;
     isMicReadyRef.current = false;
     isMicSettledRef.current = false;
+    greetingSentRef.current = false;
 
     if (connectionTimeoutRef.current) {
       window.clearTimeout(connectionTimeoutRef.current);
       connectionTimeoutRef.current = null;
     }
+    if (autoFallbackTimerRef.current) {
+      window.clearTimeout(autoFallbackTimerRef.current);
+      autoFallbackTimerRef.current = null;
+    }
 
     if (liveSessionRef.current) {
+      const prevLive = liveSessionRef.current;
+      liveSessionRef.current = null;
       try {
-        liveSessionRef.current.close();
+        prevLive.close();
       } catch {
         // Ignore
       }
-      liveSessionRef.current = null;
     }
     if (wsRef.current) {
+      const prevWs = wsRef.current;
+      wsRef.current = null;
       try {
-        wsRef.current.close();
+        prevWs.close();
       } catch {
         // Ignore
       }
-      wsRef.current = null;
     }
 
     connectionTimeoutRef.current = window.setTimeout(() => {
       if (!sessionReadyRef.current) {
         console.warn('Live voice connection timed out');
+        const timeoutMsg =
+          'Voice connection timed out. Switched automatically to Text Chat mode so you can keep practicing.';
         cleanupAll();
         setIsConnecting(false);
         setIsConnected(false);
         isConnectingRef.current = false;
-        setConnectionError(
-          'Connection timed out while establishing live voice session. Check your network and click Retry.'
-        );
+        setConnectionError(timeoutMsg);
+        scheduleAutoFallbackToChat(timeoutMsg);
       }
-    }, 12000);
+    }, 15000);
 
     // 1. Pre-warm Audio Output Context
     if (!playerRef.current) playerRef.current = new LiveAudioPlayer();
@@ -686,10 +894,12 @@ Key guidelines for voice conversation:
       wsRef.current = socket;
 
       socket.onopen = () => {
+        if (wsRef.current !== socket) return;
         socket.send(
           JSON.stringify({
             type: 'init',
             targetLanguage: scenario.language,
+            nativeLanguage: nativeLanguageName,
             learnerLevel: scenario.level,
             scenario: `${scenario.title} (${scenario.partnerRole})`,
             voiceName: selectedVoice,
@@ -701,6 +911,7 @@ Key guidelines for voice conversation:
       };
 
       socket.onmessage = (event) => {
+        if (wsRef.current !== socket) return;
         try {
           const msg = JSON.parse(event.data);
 
@@ -709,34 +920,50 @@ Key guidelines for voice conversation:
               window.clearTimeout(connectionTimeoutRef.current);
               connectionTimeoutRef.current = null;
             }
+            if (autoFallbackTimerRef.current) {
+              window.clearTimeout(autoFallbackTimerRef.current);
+              autoFallbackTimerRef.current = null;
+            }
             sessionReadyRef.current = true;
             setIsConnected(true);
             setConnectionError(null);
+            onVoiceCallStarted?.(sessionIdRef.current);
 
             if (isMicSettledRef.current) {
               setIsConnecting(false);
               isConnectingRef.current = false;
             }
+            sendOpeningGreetingIfReady(undefined, socket);
           } else if (msg.type === 'audio') {
+            finalizeActiveUserTurn();
             if (playerRef.current) {
               playerRef.current.playChunk(msg.audio);
               setIsModelSpeaking(true);
             }
           } else if (msg.type === 'model_text_chunk') {
-            currentModelTurnRef.current += msg.text;
+            finalizeActiveUserTurn();
+            currentModelTurnRef.current = mergeTranscriptChunk(
+              currentModelTurnRef.current,
+              msg.text
+            );
             updateStreamingModelTurn(currentModelTurnRef.current);
           } else if (msg.type === 'model_transcription') {
-            currentModelTurnRef.current = msg.text;
-            finalizeModelTurn(msg.text);
+            finalizeActiveUserTurn();
+            currentModelTurnRef.current = mergeTranscriptChunk(
+              currentModelTurnRef.current,
+              msg.text
+            );
+            updateStreamingModelTurn(currentModelTurnRef.current);
           } else if (msg.type === 'user_transcription') {
             hasVoiceTurnRef.current = true;
-            appendUserTurn(msg.text, true);
+            appendStreamingUserChunk(msg.text);
           } else if (msg.type === 'interrupted') {
             if (playerRef.current) {
               playerRef.current.interrupt();
             }
             setIsModelSpeaking(false);
           } else if (msg.type === 'turn_complete') {
+            finalizeActiveUserTurn();
             setIsModelSpeaking(false);
             if (currentModelTurnRef.current) {
               finalizeModelTurn(currentModelTurnRef.current);
@@ -747,9 +974,16 @@ Key guidelines for voice conversation:
               window.clearTimeout(connectionTimeoutRef.current);
               connectionTimeoutRef.current = null;
             }
-            setConnectionError(msg.message);
+            const errMsg =
+              msg.errorCode === 'MISSING_API_KEY'
+                ? 'Voice service not configured. Please check API Key in Vercel Settings'
+                : msg.message || 'Voice connection error occurred.';
+            setConnectionError(errMsg);
             setIsConnecting(false);
+            setIsConnected(false);
+            sessionReadyRef.current = false;
             isConnectingRef.current = false;
+            scheduleAutoFallbackToChat(errMsg);
           }
         } catch (err) {
           console.error('Error parsing live WS message:', err);
@@ -757,19 +991,20 @@ Key guidelines for voice conversation:
       };
 
       socket.onerror = async (err) => {
+        if (wsRef.current !== socket) return;
         console.warn('Backend WebSocket unavailable, attempting direct Live API fallback...', err);
-        if (wsRef.current) {
-          try {
-            wsRef.current.close();
-          } catch {
-            // Ignore
-          }
-          wsRef.current = null;
+        wsRef.current = null;
+        try {
+          socket.close();
+        } catch {
+          // Ignore
         }
         await connectDirectLiveAPI();
       };
 
       socket.onclose = () => {
+        if (wsRef.current !== socket) return;
+        wsRef.current = null;
         setIsConnected(false);
         sessionReadyRef.current = false;
       };
@@ -777,7 +1012,15 @@ Key guidelines for voice conversation:
       console.warn('Failed to open live WebSocket, falling back to direct connection:', wsErr);
       await connectDirectLiveAPI();
     }
-  }, [scenario, selectedVoice, connectDirectLiveAPI, cleanupAll, requestMicrophoneCapture]);
+  }, [
+    scenario,
+    selectedVoice,
+    connectDirectLiveAPI,
+    cleanupAll,
+    requestMicrophoneCapture,
+    scheduleAutoFallbackToChat,
+    sendOpeningGreetingIfReady,
+  ]);
 
   useEffect(() => {
     startSession();
@@ -785,6 +1028,69 @@ Key guidelines for voice conversation:
       cleanupAll();
     };
   }, [scenario.id, selectedVoice]);
+
+  const mergeTranscriptChunk = (existing: string, incoming: string): string => {
+    const cleanIncoming = incoming;
+    if (!existing) return cleanIncoming.trimStart();
+    if (cleanIncoming.startsWith(existing)) return cleanIncoming;
+    const needsSpace =
+      !/\s$/.test(existing) &&
+      !/^[\s.,!?;:'")\]}]/.test(cleanIncoming) &&
+      !/^['’]/.test(cleanIncoming);
+    return `${existing}${needsSpace ? ' ' : ''}${cleanIncoming}`.trimStart();
+  };
+
+  const finalizeActiveUserTurn = () => {
+    if (userTurnCheckTimerRef.current) {
+      window.clearTimeout(userTurnCheckTimerRef.current);
+      userTurnCheckTimerRef.current = null;
+    }
+    const turnId = currentUserTurnIdRef.current;
+    const finalText = currentUserTurnTextRef.current.trim();
+    if (!turnId || !finalText) return;
+
+    currentUserTurnIdRef.current = null;
+    currentUserTurnTextRef.current = '';
+
+    setTranscript((prev) =>
+      prev.map((item) => (item.id === turnId ? { ...item, text: finalText, isStreaming: false } : item))
+    );
+    checkObjectives(finalText);
+    checkUtteranceMistakesQuietly(turnId, finalText);
+  };
+
+  const appendStreamingUserChunk = (chunk: string) => {
+    if (!chunk || !chunk.trim()) return;
+    if (!currentUserTurnIdRef.current) {
+      const turnId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
+      currentUserTurnIdRef.current = turnId;
+      currentUserTurnTextRef.current = chunk.trimStart();
+      setTranscript((prev) => [
+        ...prev,
+        {
+          id: turnId,
+          role: 'user',
+          text: currentUserTurnTextRef.current,
+          timestamp: Date.now(),
+          isStreaming: true,
+        },
+      ]);
+    } else {
+      const turnId = currentUserTurnIdRef.current;
+      const merged = mergeTranscriptChunk(currentUserTurnTextRef.current, chunk);
+      currentUserTurnTextRef.current = merged;
+      setTranscript((prev) =>
+        prev.map((item) => (item.id === turnId ? { ...item, text: merged, isStreaming: true } : item))
+      );
+    }
+
+    if (userTurnCheckTimerRef.current) {
+      window.clearTimeout(userTurnCheckTimerRef.current);
+    }
+    userTurnCheckTimerRef.current = window.setTimeout(() => {
+      finalizeActiveUserTurn();
+    }, 1200);
+  };
 
   const updateStreamingModelTurn = (accumulatedText: string) => {
     setTranscript((prev) => {
@@ -827,6 +1133,7 @@ Key guidelines for voice conversation:
   };
 
   const appendUserTurn = (userText: string, checkMistakes: boolean) => {
+    finalizeActiveUserTurn();
     const turnId = `user-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`;
     setTranscript((prev) => [
       ...prev,
@@ -848,7 +1155,7 @@ Key guidelines for voice conversation:
     setObjectives((prev) =>
       prev.map((obj) => {
         if (obj.completed) return obj;
-        const words = obj.title.toLowerCase().split(' ');
+        const words = `${obj.title} ${obj.description}`.toLowerCase().split(/\W+/);
         const matches = words.some((w) => w.length > 3 && lower.includes(w));
         return matches ? { ...obj, completed: true } : obj;
       })
@@ -912,16 +1219,18 @@ Key guidelines for voice conversation:
   ).padStart(2, '0')}`;
 
   return (
-    <div className="flex flex-col h-[calc(100vh-4rem)] max-w-7xl mx-auto p-3 sm:p-5 gap-4">
+    <div className="flex flex-col min-h-[calc(100vh-5.5rem)] lg:h-[calc(100vh-4.5rem)] max-w-7xl w-full mx-auto p-2.5 sm:p-5 gap-3 sm:gap-4">
       {/* Top Scenario Banner & Session Status */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4 backdrop-blur-md shadow-lg">
-        <div className="flex items-center space-x-3 w-full md:w-auto">
-          <span className="text-3xl p-2.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 shadow-inner">
+      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-3 sm:p-4 flex flex-col md:flex-row items-start md:items-center justify-between gap-3 sm:gap-4 backdrop-blur-md shadow-lg">
+        <div className="flex items-center space-x-3 w-full md:w-auto min-w-0">
+          <span className="text-2xl sm:text-3xl p-2 sm:p-2.5 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 shadow-inner shrink-0">
             {scenario.icon}
           </span>
-          <div className="min-w-0">
-            <div className="flex items-center flex-wrap gap-2">
-              <h2 className="font-bold text-white text-base sm:text-lg truncate">{scenario.title}</h2>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center flex-wrap gap-x-2 gap-y-0.5">
+              <h2 className="font-bold text-white text-sm sm:text-lg truncate max-w-full">
+                {scenario.title}
+              </h2>
               <span className="text-xs font-semibold text-indigo-300">
                 · {scenario.language} · {scenario.level}
               </span>
@@ -935,10 +1244,10 @@ Key guidelines for voice conversation:
         </div>
 
         {/* Live Controls & Voice Persona */}
-        <div className="flex items-center flex-wrap gap-2.5 w-full md:w-auto justify-end">
+        <div className="flex items-center flex-wrap gap-2 w-full md:w-auto justify-between sm:justify-end">
           {/* Live Duration Timer */}
           <div
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs font-mono tabular-nums text-slate-300"
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs font-mono tabular-nums text-slate-300 shrink-0"
             title="Active session duration"
           >
             <Clock className="w-3.5 h-3.5 text-indigo-400" />
@@ -946,13 +1255,14 @@ Key guidelines for voice conversation:
           </div>
 
           {/* Voice Persona Selector */}
-          <div className="flex items-center space-x-1.5 bg-slate-950/70 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-slate-300">
-            <Radio className="w-3.5 h-3.5 text-indigo-400" />
-            <span className="text-slate-500">Voice:</span>
+          <div className="flex items-center space-x-1.5 bg-slate-950/70 border border-slate-800 rounded-xl px-2.5 sm:px-3 py-1.5 text-xs text-slate-300 max-w-full">
+            <Radio className="w-3.5 h-3.5 text-indigo-400 shrink-0" />
+            <span className="text-slate-500 hidden sm:inline">Voice:</span>
             <select
               value={selectedVoice}
               onChange={(e) => onVoiceChange(e.target.value as LiveVoiceName)}
-              className="bg-transparent text-indigo-300 font-semibold focus:outline-none cursor-pointer"
+              aria-label="Select AI voice persona"
+              className="bg-transparent text-indigo-300 font-semibold focus:outline-none cursor-pointer max-w-[140px] sm:max-w-none truncate"
             >
               <option value="Zephyr" className="bg-slate-900">Zephyr (Warm & Natural)</option>
               <option value="Puck" className="bg-slate-900">Puck (Lively & Friendly)</option>
@@ -963,16 +1273,16 @@ Key guidelines for voice conversation:
           </div>
 
           {/* Connection Status Indicator */}
-          <div className="flex items-center space-x-1.5 px-3 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs">
+          <div className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 rounded-xl bg-slate-950/70 border border-slate-800 text-xs shrink-0">
             {isConnected ? (
               <>
                 <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="text-emerald-300 font-semibold text-[11px]">Live Voice Connected</span>
+                <span className="text-emerald-300 font-semibold text-[11px]">{t('voiceConnected')}</span>
               </>
             ) : isConnecting ? (
               <>
                 <RefreshCw className="w-3 h-3 text-amber-400 animate-spin" />
-                <span className="text-amber-300 text-[11px]">Connecting...</span>
+                <span className="text-amber-300 text-[11px]">{t('voiceConnecting')}</span>
               </>
             ) : (
               <button
@@ -981,10 +1291,10 @@ Key guidelines for voice conversation:
                   startSession();
                 }}
                 className="flex items-center space-x-1.5 text-rose-400 hover:text-rose-300 font-semibold text-[11px] cursor-pointer"
-                title="Reconnect voice session"
+                title={t('voiceDisconnectedReconnect')}
               >
                 <RefreshCw className="w-3 h-3" />
-                <span>Disconnected · Reconnect</span>
+                <span>{t('voiceDisconnectedReconnect')}</span>
               </button>
             )}
           </div>
@@ -992,28 +1302,31 @@ Key guidelines for voice conversation:
           {/* End Call Button */}
           <button
             onClick={handleEndSession}
-            className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-bold transition shadow-lg shadow-rose-950/40 cursor-pointer whitespace-nowrap"
+            className="flex items-center space-x-1.5 px-3.5 sm:px-4 py-2 rounded-xl bg-rose-600/90 hover:bg-rose-600 text-white text-xs font-bold transition shadow-lg shadow-rose-950/40 cursor-pointer whitespace-nowrap shrink-0"
           >
             <PhoneOff className="w-4 h-4" />
-            <span>End & Report</span>
+            <span>{t('endAndReport')}</span>
           </button>
         </div>
       </div>
 
       {/* Connection Error Banner */}
       {connectionError && (
-        <div className="bg-rose-950/50 border border-rose-800/80 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-200 animate-fadeIn">
-          <div className="flex items-start space-x-2">
+        <div
+          role="alert"
+          className="bg-rose-950/50 border border-rose-800/80 rounded-xl p-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-rose-200 animate-fadeIn"
+        >
+          <div className="flex items-start space-x-2 min-w-0">
             <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-            <span>{connectionError}</span>
+            <span className="break-words">{connectionError}</span>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
             <button
-              onClick={onSwitchToChat}
+              onClick={() => onSwitchToChat(connectionError)}
               className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg font-semibold transition cursor-pointer flex items-center gap-1.5"
             >
               <MessageSquare className="w-3.5 h-3.5" />
-              <span>Use Text Chat</span>
+              <span>{t('useTextChat')}</span>
             </button>
             <button
               onClick={() => {
@@ -1023,7 +1336,7 @@ Key guidelines for voice conversation:
               className="px-3.5 py-1.5 bg-rose-800 hover:bg-rose-700 text-white rounded-lg font-bold transition shadow-md cursor-pointer flex items-center gap-1.5"
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              <span>Retry</span>
+              <span>{t('retryBtn')}</span>
             </button>
           </div>
         </div>
@@ -1035,12 +1348,12 @@ Key guidelines for voice conversation:
         isRetrying={isRetryingMic}
         onRetry={() => requestMicrophoneCapture(true)}
         onResetPermissionState={handleResetMicPermission}
-        onSwitchToChat={onSwitchToChat}
+        onSwitchToChat={() => onSwitchToChat()}
       >
         {/* Main Grid: Left Visualizer & Mission Objectives, Right Live Transcript */}
         <div className="flex-1 grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-0">
         {/* Left Column: Visualizer, Objectives, Useful Phrases (5 cols) */}
-        <div className="lg:col-span-5 flex flex-col gap-4 overflow-y-auto pr-1">
+        <div className="lg:col-span-5 flex flex-col gap-4 lg:overflow-y-auto lg:pr-1">
           {/* Audio Visualizer Card */}
           <div className="bg-slate-900/70 border border-slate-800 rounded-2xl p-5 flex flex-col items-center justify-center relative overflow-hidden backdrop-blur-md shadow-lg">
             <AudioVisualizer
@@ -1053,32 +1366,39 @@ Key guidelines for voice conversation:
             />
 
             {/* Mic Action Bar */}
-            <div className="flex items-center space-x-3 mt-4">
+            <div className="flex flex-wrap items-center justify-center gap-2.5 mt-4">
               <button
                 onClick={handleToggleMute}
-                className={`p-3.5 rounded-full font-bold transition-all shadow-xl flex items-center justify-center cursor-pointer ${
+                className={`px-4 py-3 rounded-full font-bold transition-all shadow-xl flex items-center justify-center gap-2 text-xs cursor-pointer ${
                   !isMicReady
                     ? 'bg-amber-600 hover:bg-amber-500 text-white ring-4 ring-amber-500/20'
                     : isMuted
                     ? 'bg-rose-600 hover:bg-rose-500 text-white ring-4 ring-rose-500/20'
                     : 'bg-indigo-600 hover:bg-indigo-500 text-white ring-4 ring-indigo-500/20 shadow-indigo-600/30'
                 }`}
-                title={!isMicReady ? 'Enable microphone' : isMuted ? 'Unmute microphone' : 'Mute microphone'}
+                title={!isMicReady ? t('enableMic') : isMuted ? t('unmuteMic') : t('muteMic')}
               >
-                {!isMicReady || isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                {!isMicReady || isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+                {!isMicReady && <span>{t('enableMic')}</span>}
               </button>
 
               {scenario.starterGreeting && (
                 <button
                   onClick={() => onPlayTTS(scenario.starterGreeting)}
-                  className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700/60 transition cursor-pointer"
-                  title="Replay starter greeting"
+                  className="flex items-center space-x-1.5 px-3 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700 text-slate-300 text-xs font-medium border border-slate-700/60 transition cursor-pointer"
+                  title={t('replayGreeting')}
                 >
                   <Volume2 className="w-4 h-4 text-indigo-400" />
-                  <span>Replay Greeting</span>
+                  <span>{t('replayGreeting')}</span>
                 </button>
               )}
             </div>
+
+            {/* Voice Privacy Notice */}
+            <p className="mt-3 flex items-center justify-center gap-1.5 text-[11px] text-emerald-300/90 text-center">
+              <ShieldCheck className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+              <span>{t('voicePrivacyNotice')}</span>
+            </p>
           </div>
 
           {/* Practice Missions Checklist */}
@@ -1151,21 +1471,21 @@ Key guidelines for voice conversation:
         </div>
 
         {/* Right Column: Real-Time Interactive Transcript (7 cols) */}
-        <div className="lg:col-span-7 flex flex-col bg-slate-900/70 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-md shadow-lg min-h-0">
-          <div className="p-3.5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between gap-2">
-            <div className="flex items-center space-x-2">
-              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200">
-                Live Dialogue Transcript
+        <div className="lg:col-span-7 flex flex-col bg-slate-900/70 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-md shadow-lg min-h-[380px] lg:min-h-0">
+          <div className="p-3 sm:p-3.5 border-b border-slate-800 bg-slate-950/60 flex items-center justify-between gap-2">
+            <div className="flex items-center space-x-2 min-w-0">
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <h3 className="font-bold text-xs uppercase tracking-wider text-slate-200 truncate">
+                {t('liveTranscriptHeader')}
               </h3>
             </div>
             <span className="text-[10px] text-slate-400 hidden sm:inline">
-              Tap any phrase to inspect, listen, or view smart corrections
+              {t('tapToInspect')}
             </span>
           </div>
 
           {/* Transcript Content */}
-          <div className="flex-1 overflow-y-auto p-4 min-h-0">
+          <div className="flex-1 overflow-y-auto p-2.5 sm:p-4 min-h-0">
             <TranscriptView
               items={transcript}
               targetLanguage={scenario.language}
@@ -1195,7 +1515,7 @@ Key guidelines for voice conversation:
               type="text"
               value={textInput}
               onChange={(e) => setTextInput(e.target.value)}
-              placeholder={`Or type in ${scenario.language}...`}
+              placeholder={t('typePlaceholder', { lang: scenario.language })}
               className="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500"
             />
             <button

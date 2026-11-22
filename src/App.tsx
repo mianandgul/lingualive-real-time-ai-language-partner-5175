@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useRef, useCallback } from 'react';
 import {
   Scenario,
   TranscriptItem,
@@ -11,23 +11,70 @@ import {
 import { PRESET_SCENARIOS } from './data/scenarios';
 import { Navbar, AppTab } from './components/Navbar';
 import { ScenarioPicker } from './components/ScenarioPicker';
-import { LiveVoiceRoom, EndSessionPayload } from './components/LiveVoiceRoom';
-import { ChatPracticeView } from './components/ChatPracticeView';
-import { VocabularyVault } from './components/VocabularyVault';
-import { LearningDashboard } from './components/LearningDashboard';
-import { WordInspectorModal } from './components/WordInspectorModal';
-import { SessionSummaryModal } from './components/SessionSummaryModal';
-import { AndroidInstallModal } from './components/AndroidInstallModal';
+import type { EndSessionPayload } from './components/LiveVoiceRoom';
+import type { LegalTab } from './components/LegalSettingsModal';
+import { useI18n } from './services/i18n';
+import {
+  getVoiceQuotaStatus,
+  consumeFreeVoiceCall,
+  loadReferralState,
+  saveReferralState,
+  wipeAllLinguaLiveData,
+  REFERRAL_XP_REWARD,
+  VoiceQuotaStatus,
+  ReferralState,
+} from './services/billingService';
 import {
   loadCustomScenarios,
   saveCustomScenarios,
   loadUserProgress,
   saveUserProgress,
+  createInitialProgress,
   recordCompletedSession,
   recordVocabLearned,
   recordMistakeCorrected,
   mergeVocabItem,
 } from './services/learningStorage';
+
+const LiveVoiceRoom = lazy(() =>
+  import('./components/LiveVoiceRoom').then((m) => ({ default: m.LiveVoiceRoom }))
+);
+const ChatPracticeView = lazy(() =>
+  import('./components/ChatPracticeView').then((m) => ({ default: m.ChatPracticeView }))
+);
+const VocabularyVault = lazy(() =>
+  import('./components/VocabularyVault').then((m) => ({ default: m.VocabularyVault }))
+);
+const LearningDashboard = lazy(() =>
+  import('./components/LearningDashboard').then((m) => ({ default: m.LearningDashboard }))
+);
+const WordInspectorModal = lazy(() =>
+  import('./components/WordInspectorModal').then((m) => ({ default: m.WordInspectorModal }))
+);
+const SessionSummaryModal = lazy(() =>
+  import('./components/SessionSummaryModal').then((m) => ({ default: m.SessionSummaryModal }))
+);
+const AndroidInstallModal = lazy(() =>
+  import('./components/AndroidInstallModal').then((m) => ({ default: m.AndroidInstallModal }))
+);
+const PricingUpgradeModal = lazy(() =>
+  import('./components/PricingUpgradeModal').then((m) => ({ default: m.PricingUpgradeModal }))
+);
+const ShareInviteModal = lazy(() =>
+  import('./components/ShareInviteModal').then((m) => ({ default: m.ShareInviteModal }))
+);
+const LegalSettingsModal = lazy(() =>
+  import('./components/LegalSettingsModal').then((m) => ({ default: m.LegalSettingsModal }))
+);
+
+const LazyFallback: React.FC = () => (
+  <div className="flex-1 flex items-center justify-center p-10">
+    <div className="flex items-center gap-2.5 text-xs font-semibold text-indigo-300 bg-slate-900/80 border border-slate-800 px-4 py-2.5 rounded-2xl">
+      <div className="w-4 h-4 border-2 border-indigo-400 border-t-transparent rounded-full animate-spin" />
+      <span>Loading...</span>
+    </div>
+  </div>
+);
 
 const DEFAULT_VOCABULARY: VocabularyItem[] = [
   {
@@ -93,6 +140,7 @@ const DEFAULT_VOCABULARY: VocabularyItem[] = [
 ];
 
 export default function App() {
+  const { nativeLanguageName, setAppLang, t } = useI18n();
   const [currentTab, setCurrentTab] = useState<AppTab>('scenarios');
   const [selectedLanguage, setSelectedLanguage] = useState<string>('All');
   const [activeScenario, setActiveScenario] = useState<Scenario>(PRESET_SCENARIOS[0]);
@@ -110,6 +158,32 @@ export default function App() {
     saveUserProgress(userProgress);
   }, [userProgress]);
 
+  // Worldwide Free Plan Quota (3 calls/day), Referral +100 XP & Legal/Pricing Modals
+  const [quotaStatus, setQuotaStatus] = useState<VoiceQuotaStatus>(() => getVoiceQuotaStatus());
+  const [referralState, setReferralState] = useState<ReferralState>(() => loadReferralState());
+  const [upgradeModalState, setUpgradeModalState] = useState<{
+    isOpen: boolean;
+    limitTriggered: boolean;
+  }>({ isOpen: false, limitTriggered: false });
+  const [showShareModal, setShowShareModal] = useState<boolean>(false);
+  const [legalModalState, setLegalModalState] = useState<{
+    isOpen: boolean;
+    tab: LegalTab;
+  }>({ isOpen: false, tab: 'settings' });
+
+  useEffect(() => {
+    try {
+      const ref = new URLSearchParams(window.location.search).get('ref');
+      if (ref && ref !== referralState.myCode && !referralState.referredByCode) {
+        const nextRef: ReferralState = { ...referralState, referredByCode: ref };
+        setReferralState(nextRef);
+        saveReferralState(nextRef);
+      }
+    } catch {
+      // Ignore query parse failures
+    }
+  }, []);
+
   // Transcripts & Chat state
   const [chatTranscript, setChatTranscript] = useState<TranscriptItem[]>([
     {
@@ -122,6 +196,9 @@ export default function App() {
     },
   ]);
   const [isSendingChat, setIsSendingChat] = useState<boolean>(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatFallbackNotice, setChatFallbackNotice] = useState<string | null>(null);
+  const [chatCompletedObjectives, setChatCompletedObjectives] = useState<string[]>([]);
   const [suggestedReplies, setSuggestedReplies] = useState<
     { text: string; translation: string }[]
   >(PRESET_SCENARIOS[0].usefulPhrases || []);
@@ -193,9 +270,12 @@ export default function App() {
     setCustomScenarios((prev) => prev.filter((s) => s.id !== id));
   };
 
-  // Scenario Selection
+  // Scenario Selection (respects 3/day free voice call limit)
   const handleSelectScenario = (scenario: Scenario) => {
+    const latestQuota = getVoiceQuotaStatus();
+    setQuotaStatus(latestQuota);
     setActiveScenario(scenario);
+    setChatError(null);
     setChatTranscript([
       {
         id: `starter-${Date.now()}`,
@@ -207,12 +287,80 @@ export default function App() {
       },
     ]);
     setSuggestedReplies(scenario.usefulPhrases || []);
+    setChatCompletedObjectives([]);
+
+    if (latestQuota.isLimitReached) {
+      setChatFallbackNotice(t('limitReachedBody'));
+      setUpgradeModalState({ isOpen: true, limitTriggered: true });
+      setCurrentTab('chat');
+      return;
+    }
+
+    setChatFallbackNotice(null);
     setCurrentTab('live');
   };
+
+  const handleSelectTab = useCallback(
+    (tab: AppTab) => {
+      if (tab === 'live') {
+        const latestQuota = getVoiceQuotaStatus();
+        setQuotaStatus(latestQuota);
+        if (latestQuota.isLimitReached) {
+          setUpgradeModalState({ isOpen: true, limitTriggered: true });
+          return;
+        }
+      }
+      setCurrentTab(tab);
+    },
+    []
+  );
+
+  const handleVoiceCallStarted = useCallback((sessionId: string) => {
+    const updated = consumeFreeVoiceCall(sessionId);
+    setQuotaStatus(updated);
+  }, []);
+
+  const handleInviteShared = useCallback(() => {
+    setReferralState((prev) => {
+      const awardNow = !prev.referralBonusClaimed;
+      const next: ReferralState = {
+        ...prev,
+        invitedCount: prev.invitedCount + 1,
+        referralBonusClaimed: true,
+      };
+      saveReferralState(next);
+      if (awardNow) {
+        setUserProgress((prog) => ({
+          ...prog,
+          xp: prog.xp + REFERRAL_XP_REWARD,
+        }));
+      }
+      return next;
+    });
+  }, []);
+
+  const handleDeleteAllUserData = useCallback(() => {
+    wipeAllLinguaLiveData();
+    setCustomScenarios([]);
+    setUserProgress(createInitialProgress());
+    setVaultItems([]);
+    setQuotaStatus(getVoiceQuotaStatus());
+    setReferralState(loadReferralState());
+    setAppLang('en');
+  }, [setAppLang]);
+
+  const handleSwitchToChat = useCallback((reason?: string) => {
+    setChatFallbackNotice(
+      reason ||
+        'Switched to Text Chat mode so you can continue practicing seamlessly.'
+    );
+    setCurrentTab('chat');
+  }, []);
 
   // Chat message sending with gemini-3.8-flash + Smart Mistake Correction
   const handleSendChatMessage = async (userText: string) => {
     setIsSendingChat(true);
+    setChatError(null);
 
     const userItemId = `user-${Date.now()}`;
     const userItem: TranscriptItem = {
@@ -231,6 +379,7 @@ export default function App() {
         body: JSON.stringify({
           message: userText,
           targetLanguage: activeScenario.language,
+          nativeLanguage: nativeLanguageName,
           learnerLevel: activeScenario.level,
           scenario: `${activeScenario.title} (${activeScenario.partnerRole})`,
           aiPersonality: activeScenario.aiPersonality || '',
@@ -240,7 +389,14 @@ export default function App() {
         }),
       });
 
-      if (!res.ok) throw new Error('Chat partner failed to reply');
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        const msg =
+          errData?.errorCode === 'MISSING_API_KEY' || res.status === 503
+            ? 'Voice service not configured. Please check API Key in Vercel Settings'
+            : errData?.error || 'Chat partner failed to reply. Please check your connection and try again.';
+        throw new Error(msg);
+      }
       const data = await res.json();
 
       const rawCorrection = data.mistakeCorrection;
@@ -279,11 +435,21 @@ export default function App() {
         setSuggestedReplies(data.suggestedReplies);
       }
 
+      if (Array.isArray(data.completedObjectives) && data.completedObjectives.length > 0) {
+        setChatCompletedObjectives((prev) =>
+          Array.from(new Set([...prev, ...data.completedObjectives]))
+        );
+      }
+
       if (data.reply) {
         handlePlayTTS(data.reply);
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error('Chat error:', err);
+      setChatError(
+        err?.message ||
+          'Network or AI service error while replying. Please try again.'
+      );
     } finally {
       setIsSendingChat(false);
     }
@@ -428,14 +594,18 @@ export default function App() {
       {/* Top Navbar */}
       <Navbar
         currentTab={currentTab}
-        onSelectTab={setCurrentTab}
+        onSelectTab={handleSelectTab}
         selectedLanguage={selectedLanguage}
         onLanguageChange={setSelectedLanguage}
         activeScenarioTitle={activeScenario.title}
         vaultCount={vaultItems.length}
         xp={userProgress.xp}
         streakDays={userProgress.streakDays}
+        quotaStatus={quotaStatus}
         onOpenAndroidModal={() => setShowAndroidModal(true)}
+        onOpenUpgradeModal={() => setUpgradeModalState({ isOpen: true, limitTriggered: false })}
+        onOpenShareModal={() => setShowShareModal(true)}
+        onOpenLegalModal={() => setLegalModalState({ isOpen: true, tab: 'settings' })}
       />
 
       {/* Main Content Body */}
@@ -449,107 +619,168 @@ export default function App() {
             onSaveCustomScenario={handleSaveCustomScenario}
             onDeleteCustomScenario={handleDeleteCustomScenario}
             userProgress={userProgress}
+            quotaStatus={quotaStatus}
             onOpenDashboard={() => setCurrentTab('dashboard')}
+            onOpenUpgrade={() => setUpgradeModalState({ isOpen: true, limitTriggered: false })}
+            onOpenShare={() => setShowShareModal(true)}
+            onOpenAndroidInstall={() => setShowAndroidModal(true)}
+            onOpenLegalTab={(tab) => setLegalModalState({ isOpen: true, tab })}
           />
         )}
 
-        {currentTab === 'live' && (
-          <LiveVoiceRoom
-            scenario={activeScenario}
-            selectedVoice={selectedVoice}
-            onVoiceChange={setSelectedVoice}
-            onEndSession={handleEndSession}
-            onInspectPhrase={(phrase) => setInspectPhrase(phrase)}
-            onSaveToVault={handleAddToVault}
-            onSaveCorrection={handleSaveCorrection}
-            onPlayTTS={handlePlayTTS}
-            onSwitchToChat={() => setCurrentTab('chat')}
-          />
-        )}
+        <Suspense fallback={currentTab !== 'scenarios' ? <LazyFallback /> : null}>
+          {currentTab === 'live' && (
+            <LiveVoiceRoom
+              scenario={activeScenario}
+              selectedVoice={selectedVoice}
+              onVoiceChange={setSelectedVoice}
+              onVoiceCallStarted={handleVoiceCallStarted}
+              onEndSession={handleEndSession}
+              onInspectPhrase={(phrase) => setInspectPhrase(phrase)}
+              onSaveToVault={handleAddToVault}
+              onSaveCorrection={handleSaveCorrection}
+              onPlayTTS={handlePlayTTS}
+              onSwitchToChat={handleSwitchToChat}
+            />
+          )}
 
-        {currentTab === 'chat' && (
-          <ChatPracticeView
-            scenario={activeScenario}
-            transcript={chatTranscript}
-            onSendMessage={handleSendChatMessage}
-            isSending={isSendingChat}
-            onPlayTTS={handlePlayTTS}
-            onInspectPhrase={(phrase) => setInspectPhrase(phrase)}
-            onSaveToVault={handleAddToVault}
-            onSaveCorrection={handleSaveCorrection}
-            onSwitchToLiveVoice={() => setCurrentTab('live')}
-            onEndChatSession={handleEndSession}
-            suggestedReplies={suggestedReplies}
-          />
-        )}
+          {currentTab === 'chat' && (
+            <ChatPracticeView
+              scenario={activeScenario}
+              transcript={chatTranscript}
+              onSendMessage={handleSendChatMessage}
+              isSending={isSendingChat}
+              chatError={chatError}
+              onDismissChatError={() => setChatError(null)}
+              fallbackNotice={chatFallbackNotice}
+              onDismissFallbackNotice={() => setChatFallbackNotice(null)}
+              onPlayTTS={handlePlayTTS}
+              onInspectPhrase={(phrase) => setInspectPhrase(phrase)}
+              onSaveToVault={handleAddToVault}
+              onSaveCorrection={handleSaveCorrection}
+              onSwitchToLiveVoice={() => {
+                const latestQuota = getVoiceQuotaStatus();
+                setQuotaStatus(latestQuota);
+                if (latestQuota.isLimitReached) {
+                  setUpgradeModalState({ isOpen: true, limitTriggered: true });
+                  return;
+                }
+                setChatFallbackNotice(null);
+                setCurrentTab('live');
+              }}
+              onEndChatSession={handleEndSession}
+              completedObjectives={chatCompletedObjectives}
+              suggestedReplies={suggestedReplies}
+            />
+          )}
 
-        {currentTab === 'vault' && (
-          <VocabularyVault
-            items={vaultItems}
-            onToggleMastered={handleToggleMastered}
-            onDeleteItem={handleDeleteVaultItem}
-            onAddItem={handleAddToVault}
-            onMarkPracticed={handleMarkPracticed}
-            onPlayTTS={handlePlayTTS}
-            selectedLanguage={selectedLanguage}
-          />
-        )}
+          {currentTab === 'vault' && (
+            <VocabularyVault
+              items={vaultItems}
+              onToggleMastered={handleToggleMastered}
+              onDeleteItem={handleDeleteVaultItem}
+              onAddItem={handleAddToVault}
+              onMarkPracticed={handleMarkPracticed}
+              onPlayTTS={handlePlayTTS}
+              selectedLanguage={selectedLanguage}
+            />
+          )}
 
-        {currentTab === 'dashboard' && (
-          <LearningDashboard
-            progress={userProgress}
-            vocabItems={vaultItems}
-            onViewReport={handleViewSavedReport}
-            onStartScenarios={() => setCurrentTab('scenarios')}
-            onOpenVault={() => setCurrentTab('vault')}
-          />
-        )}
+          {currentTab === 'dashboard' && (
+            <LearningDashboard
+              progress={userProgress}
+              vocabItems={vaultItems}
+              onViewReport={handleViewSavedReport}
+              onStartScenarios={() => setCurrentTab('scenarios')}
+              onOpenVault={() => setCurrentTab('vault')}
+            />
+          )}
+        </Suspense>
       </main>
 
-      {/* Deep Word & Grammar Inspector Modal */}
-      {inspectPhrase && (
-        <WordInspectorModal
-          phrase={inspectPhrase}
-          targetLanguage={activeScenario.language}
-          isOpen={Boolean(inspectPhrase)}
-          onClose={() => setInspectPhrase(null)}
-          onSaveToVault={handleAddToVault}
-          onPlayTTS={handlePlayTTS}
-        />
-      )}
+      {/* Lazy-Loaded Modals */}
+      <Suspense fallback={null}>
+        {/* Deep Word & Grammar Inspector Modal */}
+        {inspectPhrase && (
+          <WordInspectorModal
+            phrase={inspectPhrase}
+            targetLanguage={activeScenario.language}
+            isOpen={Boolean(inspectPhrase)}
+            onClose={() => setInspectPhrase(null)}
+            onSaveToVault={handleAddToVault}
+            onPlayTTS={handlePlayTTS}
+          />
+        )}
 
-      {/* AI Conversation Feedback Report Modal */}
-      {summaryState && (
-        <SessionSummaryModal
-          isOpen={summaryState.isOpen}
-          scenario={summaryState.scenario}
-          sessionPayload={summaryState.sessionPayload}
-          existingReport={summaryState.existingReport}
-          onClose={() => setSummaryState(null)}
-          onReportReady={handleReportReady}
-          onSaveCorrection={handleSaveCorrection}
-          onSaveVocab={handleAddToVault}
-          onPlayTTS={handlePlayTTS}
-          onOpenVault={() => {
-            setSummaryState(null);
-            setCurrentTab('vault');
-          }}
-          onOpenDashboard={() => {
-            setSummaryState(null);
-            setCurrentTab('dashboard');
-          }}
-          onNewScenario={() => {
-            setSummaryState(null);
-            setCurrentTab('scenarios');
-          }}
-        />
-      )}
+        {/* AI Conversation Feedback Report Modal */}
+        {summaryState && (
+          <SessionSummaryModal
+            isOpen={summaryState.isOpen}
+            scenario={summaryState.scenario}
+            sessionPayload={summaryState.sessionPayload}
+            existingReport={summaryState.existingReport}
+            onClose={() => setSummaryState(null)}
+            onReportReady={handleReportReady}
+            onSaveCorrection={handleSaveCorrection}
+            onSaveVocab={handleAddToVault}
+            onPlayTTS={handlePlayTTS}
+            onOpenVault={() => {
+              setSummaryState(null);
+              setCurrentTab('vault');
+            }}
+            onOpenDashboard={() => {
+              setSummaryState(null);
+              setCurrentTab('dashboard');
+            }}
+            onNewScenario={() => {
+              setSummaryState(null);
+              setCurrentTab('scenarios');
+            }}
+          />
+        )}
 
-      {/* Android App & APK Installation Guide Modal */}
-      <AndroidInstallModal
-        isOpen={showAndroidModal}
-        onClose={() => setShowAndroidModal(false)}
-      />
+        {/* Android App & APK Installation Guide Modal */}
+        {showAndroidModal && (
+          <AndroidInstallModal
+            isOpen={showAndroidModal}
+            onClose={() => setShowAndroidModal(false)}
+          />
+        )}
+
+        {/* Free Plan & Locked Premium Upgrade Preview Modal */}
+        {upgradeModalState.isOpen && (
+          <PricingUpgradeModal
+            isOpen={upgradeModalState.isOpen}
+            onClose={() => setUpgradeModalState({ isOpen: false, limitTriggered: false })}
+            quotaStatus={quotaStatus}
+            limitTriggered={upgradeModalState.limitTriggered}
+            onContinueFreeChat={() => {
+              setUpgradeModalState({ isOpen: false, limitTriggered: false });
+              setCurrentTab('chat');
+            }}
+          />
+        )}
+
+        {/* Share & Invite Friend (+100 XP) Modal */}
+        {showShareModal && (
+          <ShareInviteModal
+            isOpen={showShareModal}
+            onClose={() => setShowShareModal(false)}
+            referralState={referralState}
+            onInviteShared={handleInviteShared}
+          />
+        )}
+
+        {/* Settings, GDPR Deletion & Legal (Privacy, Terms, Contact) Modal */}
+        {legalModalState.isOpen && (
+          <LegalSettingsModal
+            isOpen={legalModalState.isOpen}
+            initialTab={legalModalState.tab}
+            onClose={() => setLegalModalState((prev) => ({ ...prev, isOpen: false }))}
+            onDeleteAllUserData={handleDeleteAllUserData}
+          />
+        )}
+      </Suspense>
     </div>
   );
 }

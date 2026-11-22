@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { VocabularyItem } from '../types';
 import { SUPPORTED_LANGUAGES } from '../data/scenarios';
+import { useI18n } from '../services/i18n';
 import {
   Bookmark,
   Volume2,
@@ -63,6 +64,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
   onPlayTTS,
   selectedLanguage,
 }) => {
+  const { t, formatDate } = useI18n();
   const [viewMode, setViewMode] = useState<VaultViewMode>('vocabulary');
   const [statusFilter, setStatusFilter] = useState<'All' | 'To Learn' | 'Learned'>('All');
   const [localLanguage, setLocalLanguage] = useState<string>(selectedLanguage);
@@ -96,8 +98,12 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
 
   const baseFilteredItems = useMemo(() => {
     return items.filter((item) => {
+      const itemLang = item.language.toLowerCase();
+      const filterLang = localLanguage.toLowerCase();
       const matchLang =
-        localLanguage === 'All' || item.language.toLowerCase() === localLanguage.toLowerCase();
+        localLanguage === 'All' ||
+        itemLang === filterLang ||
+        (filterLang.includes('chinese') && itemLang.includes('chinese'));
       if (!matchLang) return false;
 
       if (statusFilter === 'To Learn' && item.mastered) return false;
@@ -184,9 +190,9 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
   };
 
   return (
-    <div className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
+    <div className="max-w-6xl w-full mx-auto p-3 sm:p-6 space-y-5 sm:space-y-6">
       {/* Memory Header */}
-      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-slate-900/60 border border-slate-800 p-5 rounded-2xl backdrop-blur-md">
+      <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 bg-slate-900/60 border border-slate-800 p-4 sm:p-5 rounded-2xl backdrop-blur-md">
         <div className="flex items-center space-x-3">
           <span className="p-3 rounded-2xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
             <Bookmark className="w-6 h-6" />
@@ -206,31 +212,31 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
             className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>Add Word / Phrase</span>
+            <span>{t('addWordPhrase')}</span>
           </button>
           <button
             onClick={startRevisionQuiz}
             className="flex items-center space-x-1.5 px-3.5 py-2 rounded-xl bg-purple-600 hover:bg-purple-500 text-white text-xs font-bold transition shadow-md cursor-pointer"
           >
             <Brain className="w-4 h-4" />
-            <span>Revision Exercise</span>
+            <span>{t('revisionExercise')}</span>
           </button>
         </div>
       </div>
 
       {/* Sub-navigation Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center space-x-1 bg-slate-900/80 border border-slate-800 p-1 rounded-2xl overflow-x-auto">
+        <div className="flex flex-wrap items-center gap-1 bg-slate-900/80 border border-slate-800 p-1 rounded-2xl w-full sm:w-auto">
           <button
             onClick={() => setViewMode('vocabulary')}
-            className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold transition cursor-pointer whitespace-nowrap ${
               viewMode === 'vocabulary'
                 ? 'bg-indigo-600 text-white shadow'
                 : 'text-slate-400 hover:text-slate-200'
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>My Vocabulary</span>
+            <span>{t('myVocabulary')}</span>
           </button>
           <button
             onClick={() => setViewMode('phrases')}
@@ -241,7 +247,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
             }`}
           >
             <MessageSquareQuote className="w-3.5 h-3.5" />
-            <span>Saved Phrases</span>
+            <span>{t('savedPhrases')}</span>
           </button>
           <button
             onClick={() => {
@@ -256,7 +262,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
             }`}
           >
             <Sparkles className="w-3.5 h-3.5" />
-            <span>Flashcards</span>
+            <span>{t('flashcardsTab')}</span>
           </button>
           <button
             onClick={startRevisionQuiz}
@@ -267,7 +273,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
             }`}
           >
             <Brain className="w-3.5 h-3.5" />
-            <span>Revision Quiz</span>
+            <span>{t('revisionQuizTab')}</span>
           </button>
         </div>
       </div>
@@ -280,14 +286,14 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
         >
           <div className="flex items-center justify-between border-b border-slate-800 pb-2">
             <span className="text-xs font-bold uppercase tracking-wider text-slate-300">
-              Save New Vocabulary Item
+              {t('addWordPhrase')}
             </span>
             <button
               type="button"
               onClick={() => setShowAddForm(false)}
               className="text-xs text-slate-500 hover:text-slate-300 cursor-pointer"
             >
-              Cancel
+              {t('cancelBtn')}
             </button>
           </div>
 
@@ -381,7 +387,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
               type="submit"
               className="px-4 py-1.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-md cursor-pointer"
             >
-              Save to Memory
+              {t('saveBtn')}
             </button>
           </div>
         </form>
@@ -396,7 +402,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search word, meaning, or example..."
+              placeholder={t('searchPlaceholder')}
               className="w-full bg-slate-950/80 border border-slate-700/70 rounded-xl pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-indigo-500"
             />
           </div>
@@ -408,7 +414,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
               className="bg-slate-950 border border-slate-700/70 rounded-xl px-3 py-1.5 text-xs text-slate-200 focus:outline-none focus:border-indigo-500 cursor-pointer"
               aria-label="Filter vocabulary by language"
             >
-              <option value="All">All Languages</option>
+              <option value="All">{t('allLanguages')}</option>
               {SUPPORTED_LANGUAGES.map((l) => (
                 <option key={l.id} value={l.name}>
                   {l.flag} {l.name}
@@ -427,7 +433,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
                       : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
-                  {f}
+                  {f === 'All' ? t('filterAll') : f === 'Learned' ? t('learnedStatus') : f}
                 </button>
               ))}
             </div>
@@ -514,7 +520,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
                   }`}
                 >
                   <CheckCircle2 className="w-4 h-4" />
-                  <span>{currentStudyCard.mastered ? 'Learned' : 'Mark as Learned'}</span>
+                  <span>{currentStudyCard.mastered ? t('learnedStatus') : t('markLearned')}</span>
                 </button>
 
                 <button
@@ -574,13 +580,13 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold cursor-pointer"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Practice Again</span>
+                  <span>{t('practiceAgain')}</span>
                 </button>
                 <button
                   onClick={() => setViewMode('vocabulary')}
                   className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold cursor-pointer"
                 >
-                  Return to List
+                  {t('myVocabulary')}
                 </button>
               </div>
             </div>
@@ -745,11 +751,11 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
                   </div>
 
                   {/* Card Footer: Date added, Practice Again, Mark as Learned */}
-                  <div className="pt-2.5 border-t border-slate-800/80 flex items-center justify-between gap-2 text-[11px]">
+                  <div className="pt-2.5 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2 text-[11px]">
                     <span className="inline-flex items-center gap-1 text-slate-500 tabular-nums">
                       <Calendar className="w-3 h-3" />
-                      Added {new Date(item.learnedAt).toLocaleDateString()}
-                      {item.practiceCount ? ` · Practiced ${item.practiceCount}×` : ''}
+                      {formatDate(item.learnedAt)}
+                      {item.practiceCount ? ` · ${item.practiceCount}×` : ''}
                     </span>
 
                     <div className="flex items-center gap-1.5">
@@ -757,7 +763,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
                         onClick={() => handlePracticeAgain(item)}
                         className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-indigo-600/80 text-slate-200 font-semibold transition cursor-pointer"
                       >
-                        Practice Again
+                        {t('practiceAgain')}
                       </button>
                       <button
                         onClick={() => onToggleMastered(item.id)}
@@ -768,7 +774,7 @@ export const VocabularyVault: React.FC<VocabularyVaultProps> = ({
                         }`}
                       >
                         <CheckCircle2 className="w-3 h-3" />
-                        <span>{item.mastered ? 'Learned' : 'Mark Learned'}</span>
+                        <span>{item.mastered ? t('learnedStatus') : t('markLearned')}</span>
                       </button>
                     </div>
                   </div>

@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { WordInspection, VocabularyItem } from '../types';
+import { useI18n } from '../services/i18n';
 import { Volume2, Bookmark, Check, X, Sparkles, BookOpen, Globe2, Compass } from 'lucide-react';
 
 interface WordInspectorModalProps {
@@ -19,6 +20,7 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
   onSaveToVault,
   onPlayTTS,
 }) => {
+  const { nativeLanguageName, t } = useI18n();
   const [loading, setLoading] = useState<boolean>(true);
   const [data, setData] = useState<WordInspection | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +36,7 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
     fetch('/api/inspect', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ phrase, targetLanguage }),
+      body: JSON.stringify({ phrase, targetLanguage, nativeLanguage: nativeLanguageName }),
     })
       .then((res) => {
         if (!res.ok) throw new Error('Failed to analyze phrase');
@@ -56,7 +58,7 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [isOpen, phrase, targetLanguage]);
+  }, [isOpen, phrase, targetLanguage, nativeLanguageName]);
 
   if (!isOpen) return null;
 
@@ -66,9 +68,11 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
       word: phrase,
       translation: data.translation,
       pronunciation: data.pronunciation,
+      ipa: data.ipa,
       exampleSentence: phrase,
       exampleTranslation: data.translation,
       language: targetLanguage,
+      type: phrase.trim().split(/\s+/).length >= 3 ? 'phrase' : 'word',
     });
     setSavedTokens((prev) => ({ ...prev, [phrase]: true }));
   };
@@ -77,10 +81,12 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
     onSaveToVault({
       word: token.word,
       translation: token.meaning,
-      pronunciation: '',
+      pronunciation: token.ipa || '',
+      ipa: token.ipa,
       exampleSentence: phrase,
       exampleTranslation: data?.translation || '',
       language: targetLanguage,
+      type: 'word',
     });
     setSavedTokens((prev) => ({ ...prev, [token.word]: true }));
   };
@@ -122,25 +128,25 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
               <div className="flex items-center space-x-1.5">
                 <button
                   onClick={() => onPlayTTS(phrase)}
-                  title="Listen to native pronunciation"
-                  className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-600 text-slate-200 transition"
+                  title={t('listenBtn')}
+                  className="p-2 rounded-lg bg-slate-700/70 hover:bg-indigo-600 text-slate-200 transition cursor-pointer"
                 >
                   <Volume2 className="w-4 h-4" />
                 </button>
                 <button
                   onClick={handleSaveWholePhrase}
                   disabled={savedTokens[phrase]}
-                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md transition disabled:bg-emerald-600"
+                  className="flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-md transition disabled:bg-emerald-600 cursor-pointer"
                 >
                   {savedTokens[phrase] ? (
                     <>
                       <Check className="w-3.5 h-3.5" />
-                      <span>Saved</span>
+                      <span>{t('savedBtn')}</span>
                     </>
                   ) : (
                     <>
                       <Bookmark className="w-3.5 h-3.5" />
-                      <span>Save Phrase</span>
+                      <span>{t('saveBtn')}</span>
                     </>
                   )}
                 </button>
@@ -156,7 +162,7 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
               <p className="text-xs text-rose-400">{error}</p>
             ) : (
               <div className="pt-2 border-t border-slate-700/50">
-                <span className="text-xs font-medium text-slate-400">English Translation:</span>
+                <span className="text-xs font-medium text-slate-400">{nativeLanguageName}:</span>
                 <p className="text-sm font-medium text-emerald-300 mt-0.5">{data?.translation}</p>
               </div>
             )}
@@ -196,7 +202,7 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
                       onClick={() => handleSaveToken(token)}
                       disabled={savedTokens[token.word]}
                       title="Save word to vocabulary vault"
-                      className="p-1.5 rounded-md bg-slate-700/70 hover:bg-cyan-600 text-slate-300 hover:text-white transition disabled:bg-emerald-600 disabled:text-white shrink-0"
+                      className="p-1.5 rounded-md bg-slate-700/70 hover:bg-cyan-600 text-slate-300 hover:text-white transition disabled:bg-emerald-600 disabled:text-white shrink-0 cursor-pointer"
                     >
                       {savedTokens[token.word] ? (
                         <Check className="w-3.5 h-3.5" />
@@ -240,9 +246,9 @@ export const WordInspectorModal: React.FC<WordInspectorModalProps> = ({
         <div className="p-3 border-t border-slate-800 bg-slate-950/60 flex justify-end">
           <button
             onClick={onClose}
-            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition"
+            className="px-4 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-semibold transition cursor-pointer"
           >
-            Done
+            {t('closeBtn')}
           </button>
         </div>
       </div>

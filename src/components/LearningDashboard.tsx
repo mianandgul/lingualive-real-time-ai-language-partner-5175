@@ -5,6 +5,7 @@ import {
   getDailyMissionsStatus,
   getUserLevelInfo,
 } from '../services/learningStorage';
+import { useI18n } from '../services/i18n';
 import {
   Trophy,
   Flame,
@@ -43,6 +44,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
   onStartScenarios,
   onOpenVault,
 }) => {
+  const { t, formatDate } = useI18n();
   const levelInfo = getUserLevelInfo(progress.xp);
   const dailyMissions = getDailyMissionsStatus(progress);
   const masteredCount = vocabItems.filter((v) => v.mastered).length;
@@ -133,7 +135,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
             onClick={onOpenVault}
             className="text-[11px] text-indigo-400 hover:text-indigo-300 font-semibold cursor-pointer"
           >
-            Open Vocabulary Memory &rarr;
+            {t('myVocabulary')} &rarr;
           </button>
         </div>
 
@@ -277,7 +279,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
               onClick={onStartScenarios}
               className="text-xs font-semibold text-indigo-400 hover:text-indigo-300 cursor-pointer"
             >
-              Start Practice &rarr;
+              {t('startCall')} &rarr;
             </button>
           </div>
 
@@ -295,7 +297,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                   <div className="min-w-0">
                     <p className="text-xs font-bold text-white truncate">{rep.scenarioTitle}</p>
                     <p className="text-[11px] text-slate-400 tabular-nums">
-                      {rep.language} · {rep.level} · {new Date(rep.createdAt).toLocaleDateString()} ·{' '}
+                      {rep.language} · {rep.level} · {formatDate(rep.createdAt)} ·{' '}
                       {rep.userTurnCount} turns
                     </p>
                   </div>
@@ -311,7 +313,7 @@ export const LearningDashboard: React.FC<LearningDashboardProps> = ({
                       onClick={() => onViewReport(rep)}
                       className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-xs font-semibold text-slate-200 hover:text-white transition cursor-pointer"
                     >
-                      <span>View</span>
+                      <span>{t('inspectBtn')}</span>
                       <ArrowRight className="w-3 h-3" />
                     </button>
                   </div>

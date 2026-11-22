@@ -375,7 +375,8 @@ export function recordCompletedSession(
     return { nextState: normalized, totalSessionXp: 0 };
   }
 
-  const hasMeaningfulPractice = params.userTurnCount >= 2 || params.durationSeconds >= 30;
+  const hasMeaningfulPractice =
+    params.userTurnCount >= 2 || (params.userTurnCount >= 1 && params.durationSeconds >= 20);
   if (!hasMeaningfulPractice) {
     // Do not grant fake session XP or increment streak if user didn't actually practice
     const updatedReports = params.report

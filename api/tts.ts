@@ -1,18 +1,27 @@
 import { GoogleGenAI } from '@google/genai';
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
-
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  const apiKey = process.env.GEMINI_API_KEY || process.env.LIVE_API_KEY || '';
+  if (!apiKey) {
+    console.error('[api/tts] Missing GEMINI_API_KEY / LIVE_API_KEY.');
+    return res.status(503).json({
+      errorCode: 'MISSING_API_KEY',
+      error: 'Voice service not configured. Please check API Key in Vercel Settings',
+    });
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
 
   try {
     const { text, voice = 'Kore' } = req.body || {};

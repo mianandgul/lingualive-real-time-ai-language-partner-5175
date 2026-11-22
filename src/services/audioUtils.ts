@@ -161,6 +161,21 @@ export class LiveAudioRecorder {
       throw unsupportedErr;
     }
 
+    if (!existingStream && navigator.permissions?.query) {
+      try {
+        const perm = await navigator.permissions.query({ name: 'microphone' as PermissionName });
+        if (perm.state === 'denied') {
+          const deniedErr: any = new Error('Permission denied');
+          deniedErr.name = 'NotAllowedError';
+          throw deniedErr;
+        }
+      } catch (permErr: any) {
+        if (permErr?.name === 'NotAllowedError') {
+          throw permErr;
+        }
+      }
+    }
+
     try {
       this.mediaStream =
         existingStream ||
@@ -210,6 +225,7 @@ export class LiveAudioRecorder {
       this.processor.connect(this.inputAudioCtx.destination);
       this.isRecording = true;
     } catch (err: any) {
+      this.stop();
       const name = String(err?.name || '');
       const msg = String(err?.message || '');
       const isExpectedPermissionOrDeviceIssue =

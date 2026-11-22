@@ -1,7 +1,11 @@
 export default function handler(_req: any, res: any) {
   res.status(200).json({
     status: 'ok',
-    hasApiKey: Boolean(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY),
+    hasApiKey: Boolean(
+      process.env.GEMINI_API_KEY ||
+        process.env.LIVE_API_KEY ||
+        process.env.VITE_GEMINI_API_KEY
+    ),
     time: new Date().toISOString(),
   });
 }

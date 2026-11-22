@@ -1,23 +1,46 @@
 import { GoogleGenAI } from '@google/genai';
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
+function isMissingOrInvalidKeyError(message: string): boolean {
+  const lower = message.toLowerCase();
+  return (
+    lower.includes('api_key') ||
+    lower.includes('api key') ||
+    lower.includes('permission_denied') ||
+    lower.includes('unauthorized') ||
+    lower.includes('unauthenticated') ||
+    lower.includes('401') ||
+    lower.includes('403')
+  );
+}
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const apiKey = process.env.GEMINI_API_KEY || process.env.LIVE_API_KEY || '';
+  if (!apiKey) {
+    console.error('[api/chat] Missing GEMINI_API_KEY / LIVE_API_KEY in environment variables.');
+    return res.status(503).json({
+      errorCode: 'MISSING_API_KEY',
+      error: 'Voice service not configured. Please check API Key in Vercel Settings',
+    });
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
   try {
     const {
       message,
       targetLanguage = 'Spanish',
+      nativeLanguage = 'English',
       learnerLevel = 'Beginner',
       scenario = 'Café Order',
       aiPersonality = '',
@@ -28,6 +51,7 @@ export default async function handler(req: any, res: any) {
 
     const systemInstruction = `You are an immersive, encouraging language learning conversation partner.
 Target Language: ${targetLanguage}
+Learner Native Language (for translations & explanations): ${nativeLanguage}
 Learner Level: ${learnerLevel}
 Role / Scenario: ${scenario}
 ${aiPersonality ? `AI Personality / Demeanor: ${aiPersonality}` : ''}
@@ -40,25 +64,25 @@ Instructions:
 1. Respond naturally in ${targetLanguage} to continue the roleplay, staying strictly in character.
 2. If learner level is Beginner, keep phrasing simple, clear, and polite (1-2 sentences).
 3. If learner level is Intermediate or Advanced, speak naturally with idiomatic expressions.
-4. Evaluate what the learner said. If they made a grammar, vocabulary, or sentence-structure mistake, keep your spoken reply natural (do not lecture!) and provide a structured correction in "mistakeCorrection" plus a short friendly "grammarFeedback" note.
-5. Provide 2 to 3 natural suggestions for what the user could say next (with English translations).
+4. Evaluate what the learner said. If they made a grammar, vocabulary, or sentence-structure mistake, keep your spoken reply natural (do not lecture!) and provide a structured correction in "mistakeCorrection" plus a short friendly "grammarFeedback" note written in ${nativeLanguage}.
+5. Provide 2 to 3 natural suggestions for what the user could say next (with ${nativeLanguage} translations).
 6. Check if any of the scenario objectives were completed in this turn.
 7. Return your response strictly as valid JSON adhering to this structure:
 {
   "reply": "string (your conversational response in ${targetLanguage})",
-  "translation": "string (English translation of your reply)",
+  "translation": "string (${nativeLanguage} translation of your reply)",
   "phonetics": "string (pronunciation guide or romanization, e.g. pinyin/romaji/IPA, or empty string)",
-  "grammarFeedback": "string or null (kind constructive tip if user made an error, otherwise null)",
+  "grammarFeedback": "string or null (kind constructive tip in ${nativeLanguage} if user made an error, otherwise null)",
   "mistakeCorrection": {
     "original": "exact user sentence with error",
-    "intendedMeaning": "what the user meant in English",
+    "intendedMeaning": "what the user meant in ${nativeLanguage}",
     "corrected": "natural corrected sentence in ${targetLanguage}",
     "errorType": "Grammar | Vocabulary | Structure | Register",
-    "explanation": "brief clear explanation",
+    "explanation": "brief clear explanation in ${nativeLanguage}",
     "additionalExample": "one extra example sentence in ${targetLanguage}"
   } | null,
   "suggestedReplies": [
-    { "text": "phrase in ${targetLanguage}", "translation": "English translation" }
+    { "text": "phrase in ${targetLanguage}", "translation": "${nativeLanguage} translation" }
   ],
   "completedObjectives": ["objective title 1", "objective title 2"]
 }`;
@@ -114,6 +138,13 @@ Instructions:
     res.status(200).json(parsed);
   } catch (error: any) {
     console.error('Vercel serverless chat error:', error);
-    res.status(500).json({ error: error?.message || 'Chat generation failed' });
+    const errMsg = error?.message || 'Chat generation failed';
+    if (isMissingOrInvalidKeyError(errMsg)) {
+      return res.status(503).json({
+        errorCode: 'MISSING_API_KEY',
+        error: 'Voice service not configured. Please check API Key in Vercel Settings',
+      });
+    }
+    res.status(500).json({ error: errMsg });
   }
 }

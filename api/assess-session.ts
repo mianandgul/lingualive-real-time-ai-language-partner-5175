@@ -1,23 +1,33 @@
 import { GoogleGenAI } from '@google/genai';
 
-const ai = new GoogleGenAI({
-  apiKey: process.env.GEMINI_API_KEY || '',
-  httpOptions: {
-    headers: {
-      'User-Agent': 'aistudio-build',
-    },
-  },
-});
-
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  const apiKey = process.env.GEMINI_API_KEY || process.env.LIVE_API_KEY || '';
+  if (!apiKey) {
+    console.error('[api/assess-session] Missing GEMINI_API_KEY / LIVE_API_KEY.');
+    return res.status(503).json({
+      errorCode: 'MISSING_API_KEY',
+      error: 'Voice service not configured. Please check API Key in Vercel Settings',
+    });
+  }
+
+  const ai = new GoogleGenAI({
+    apiKey,
+    httpOptions: {
+      headers: {
+        'User-Agent': 'aistudio-build',
+      },
+    },
+  });
+
   try {
     const {
       scenarioTitle,
       language = 'Spanish',
+      nativeLanguage = 'English',
       level = 'Beginner',
       durationSeconds = 0,
       transcript = [],
@@ -66,6 +76,7 @@ export default async function handler(req: any, res: any) {
         response = await ai.models.generateContent({
           model: models[i],
           contents: `You are a senior language learning coach and CEFR evaluator assessing a learner's real conversation in ${language}.
+Write all feedback, explanations, and translations in the learner's native language: ${nativeLanguage}.
 
 Scenario: ${scenarioTitle}
 Target Difficulty: ${level}
@@ -82,13 +93,13 @@ Instructions:
 3. Pronunciation rules (CRITICAL):
    ${
      canAssessPronunciation
-       ? '- Set "pronunciationAvailable": true and provide a realistic "pronunciationScore" (0-100) based on transcription clarity, phonetic accuracy of recognized words, and spoken phrasing, with a concise "pronunciationNote".'
-       : '- Set "pronunciationAvailable": false, "pronunciationScore": null, and explain in "pronunciationNote" that pronunciation was not scored due to insufficient voice audio evidence.'
+       ? `- Set "pronunciationAvailable": true and provide a realistic "pronunciationScore" (0-100) based on transcription clarity, phonetic accuracy of recognized words, and spoken phrasing, with a concise "pronunciationNote" in ${nativeLanguage}.`
+       : `- Set "pronunciationAvailable": false, "pronunciationScore": null, and explain in "pronunciationNote" (in ${nativeLanguage}) that pronunciation was not scored due to insufficient voice audio evidence.`
    }
-4. Identify real mistakes made by the learner in "mistakes" (up to 6) with original, intendedMeaning, corrected, errorType ("Grammar" | "Vocabulary" | "Structure" | "Register"), explanation, additionalExample.
-5. Suggest up to 4 "betterAlternatives" (original, improved, contextNote).
-6. Suggest 3 to 5 "wordsToPractice" (word, translation, phonetics, reason, exampleSentence).
-7. Provide 2-3 "strengths", a 2-sentence "summaryFeedback", and "cefrEstimate".
+4. Identify real mistakes made by the learner in "mistakes" (up to 6) with original, intendedMeaning (in ${nativeLanguage}), corrected (in ${language}), errorType ("Grammar" | "Vocabulary" | "Structure" | "Register"), explanation (in ${nativeLanguage}), additionalExample (in ${language}).
+5. Suggest up to 4 "betterAlternatives" (original, improved in ${language}, contextNote in ${nativeLanguage}).
+6. Suggest 3 to 5 "wordsToPractice" (word in ${language}, translation in ${nativeLanguage}, phonetics, reason in ${nativeLanguage}, exampleSentence in ${language}).
+7. Provide 2-3 "strengths" (in ${nativeLanguage}), a 2-sentence "summaryFeedback" (in ${nativeLanguage}), and "cefrEstimate".
 
 Return strictly valid JSON.`,
           config: {

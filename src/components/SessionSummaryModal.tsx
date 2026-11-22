@@ -6,6 +6,7 @@ import {
   VocabularyItem,
 } from '../types';
 import { EndSessionPayload } from './LiveVoiceRoom';
+import { useI18n } from '../services/i18n';
 import {
   Trophy,
   CheckCircle,
@@ -59,6 +60,7 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
   onOpenDashboard,
   onNewScenario,
 }) => {
+  const { nativeLanguageName, t } = useI18n();
   const [report, setReport] = useState<ConversationReport | null>(existingReport);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,7 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
         body: JSON.stringify({
           scenarioTitle: scenario.title,
           language: scenario.language,
+          nativeLanguage: nativeLanguageName,
           level: scenario.level,
           durationSeconds: payload.durationSeconds,
           transcript: payload.items,
@@ -88,7 +91,11 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
 
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || 'Failed to generate conversation report');
+        const msg =
+          errData?.errorCode === 'MISSING_API_KEY' || res.status === 503
+            ? 'Voice service not configured. Please check API Key in Vercel Settings'
+            : errData.error || 'Failed to generate conversation report';
+        throw new Error(msg);
       }
 
       const data = await res.json();
@@ -263,7 +270,7 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                   className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-bold transition cursor-pointer"
                 >
                   <RefreshCw className="w-3.5 h-3.5" />
-                  <span>Retry Assessment</span>
+                  <span>{t('retryBtn')}</span>
                 </button>
               )}
             </div>
@@ -467,7 +474,7 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                               <button
                                 onClick={() => onPlayTTS(m.corrected)}
                                 className="p-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white transition cursor-pointer"
-                                title="Listen to corrected sentence"
+                                title={t('listenBtn')}
                               >
                                 <Volume2 className="w-3.5 h-3.5" />
                               </button>
@@ -489,12 +496,12 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                                 {isSaved ? (
                                   <>
                                     <BookmarkCheck className="w-3.5 h-3.5" />
-                                    <span>Saved</span>
+                                    <span>{t('savedBtn')}</span>
                                   </>
                                 ) : (
                                   <>
                                     <BookmarkPlus className="w-3.5 h-3.5" />
-                                    <span>Save Corrected Sentence</span>
+                                    <span>{t('saveBtn')}</span>
                                   </>
                                 )}
                               </button>
@@ -587,35 +594,35 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
                               )}
                             </div>
                             <div className="flex items-center gap-1 shrink-0">
-                              <button
-                                onClick={() => onPlayTTS(w.word)}
-                                className="p-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white cursor-pointer"
-                                title="Listen"
-                              >
-                                <Volume2 className="w-3.5 h-3.5" />
-                              </button>
-                              <button
-                                onClick={() => {
-                                  onSaveVocab({
-                                    word: w.word,
-                                    translation: w.translation,
-                                    pronunciation: w.phonetics,
-                                    exampleSentence: w.exampleSentence,
-                                    language: displayReport.language,
-                                    type: 'word',
-                                    notes: w.reason,
-                                  });
-                                  setSavedWords((prev) => ({ ...prev, [w.word]: true }));
-                                }}
-                                disabled={isSaved}
-                                className={`px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
-                                  isSaved
-                                    ? 'bg-emerald-900/50 text-emerald-300'
-                                    : 'bg-indigo-600 hover:bg-indigo-500 text-white'
-                                }`}
-                              >
-                                {isSaved ? 'Saved' : 'Save'}
-                              </button>
+                                <button
+                                  onClick={() => onPlayTTS(w.word)}
+                                  className="p-1.5 rounded-lg bg-slate-800 hover:bg-indigo-600 text-slate-300 hover:text-white cursor-pointer"
+                                  title={t('listenBtn')}
+                                >
+                                  <Volume2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    onSaveVocab({
+                                      word: w.word,
+                                      translation: w.translation,
+                                      pronunciation: w.phonetics,
+                                      exampleSentence: w.exampleSentence,
+                                      language: displayReport.language,
+                                      type: 'word',
+                                      notes: w.reason,
+                                    });
+                                    setSavedWords((prev) => ({ ...prev, [w.word]: true }));
+                                  }}
+                                  disabled={isSaved}
+                                  className={`px-2 py-1 rounded-lg text-[11px] font-semibold cursor-pointer ${
+                                    isSaved
+                                      ? 'bg-emerald-900/50 text-emerald-300'
+                                      : 'bg-indigo-600 hover:bg-indigo-500 text-white'
+                                  }`}
+                                >
+                                  {isSaved ? t('savedBtn') : t('saveBtn')}
+                                </button>
                             </div>
                           </div>
                           <p className="text-[11px] text-slate-400">{w.reason}</p>
@@ -640,14 +647,14 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
               className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold transition cursor-pointer"
             >
               <BookOpen className="w-3.5 h-3.5" />
-              <span>Vocabulary Memory</span>
+              <span>{t('myVocabulary')}</span>
             </button>
             <button
               onClick={onOpenDashboard}
               className="flex items-center space-x-1.5 px-3 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-amber-300 text-xs font-semibold transition cursor-pointer"
             >
               <Trophy className="w-3.5 h-3.5" />
-              <span>XP & Missions</span>
+              <span>{t('navProgress')}</span>
             </button>
           </div>
 
@@ -655,7 +662,7 @@ export const SessionSummaryModal: React.FC<SessionSummaryModalProps> = ({
             onClick={onNewScenario}
             className="flex items-center space-x-1.5 px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold transition shadow-lg cursor-pointer"
           >
-            <span>Next Roleplay</span>
+            <span>{t('navRoles')}</span>
             <ArrowRight className="w-3.5 h-3.5" />
           </button>
         </div>
